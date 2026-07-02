@@ -10,3 +10,9 @@ services:
         value: production
       - key: NODE_VERSION
         value: 22
+      - key: USE_PUBPROXY
+        value: true
+      - key: PUBPROXY_MAX_ATTEMPTS
+        value: 6
+      - key: YOUTUBE_PROXY_URL
+        sync: false

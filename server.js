@@ -6,13 +6,20 @@ import cookieParser from 'cookie-parser'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { YoutubeTranscript } from 'youtube-transcript'
 import {
   parseVttCues,
   shouldSkipTranslation,
   translateVttContent,
   youtubeTranslationLooksApplied,
 } from './lib/subtitleTranslate.js'
+import {
+  YOUTUBE_HEADERS,
+  YouTubeBlockedError,
+  fetchTrackSubtitleContent,
+  fetchTranscriptSegments,
+  getCaptionTrackInfo,
+  isBlockedYouTubeResponse,
+} from './lib/youtubeCaptions.js'
 
 const app = express()
 const PORT = process.env.PORT || 3030
@@ -21,6 +28,7 @@ const BASE_URL = 'https://api.schooler.biz'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distPath = path.join(__dirname, 'dist')
 const isProduction = process.env.NODE_ENV === 'production'
+const preferYouTubePubProxy = Boolean(process.env.RENDER) && process.env.USE_PUBPROXY !== 'false'
 
 const isAllowedOrigin = (origin) => {
   if (!origin) return true
@@ -113,6 +121,33 @@ const handleApiError = (res, error) => {
   return res.status(500).json({ message: error.message || 'Unexpected server error' })
 }
 
+const handleSubtitleApiError = (res, error) => {
+  if (error instanceof YouTubeBlockedError || error.code === 'YOUTUBE_BLOCKED') {
+    return res.status(503).json({ message: error.message, code: 'YOUTUBE_BLOCKED' })
+  }
+  if (error.message?.includes('לא נמצאו') || error.message?.includes('ריקות')) {
+    return res.status(404).json({ message: error.message })
+  }
+  if (error.response) {
+    const data = error.response.data
+    if (typeof data === 'string' && isBlockedYouTubeResponse(data)) {
+      return res.status(503).json({
+        message:
+          'YouTube חוסם בקשות כתוביות משרתי ענן. נסו להריץ מקומית (npm start) או הגדירו YOUTUBE_PROXY_URL ב-Render.',
+        code: 'YOUTUBE_BLOCKED',
+      })
+    }
+    if (typeof data === 'object' && data !== null) {
+      return res.status(error.response.status).json(data)
+    }
+    return res.status(error.response.status).json({
+      message: 'שגיאה בקבלת כתוביות מ-YouTube',
+      code: 'YOUTUBE_ERROR',
+    })
+  }
+  return res.status(500).json({ message: error.message || 'Unexpected server error' })
+}
+
 const extractPlaylistId = (playlistUrl) => {
   try {
     const parsed = new URL(playlistUrl)
@@ -133,13 +168,6 @@ const decodeTitle = (value) =>
     .replace(/\\"/g, '"')
     .replace(/\\n/g, ' ')
     .trim()
-
-const YOUTUBE_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  'Accept-Language': 'en-US,en;q=0.9',
-  Cookie: 'CONSENT=YES+cb.20210328-17-p0.en+FX+667',
-}
 
 const extractYtInitialData = (html) => {
   const marker = 'var ytInitialData = '
@@ -242,132 +270,6 @@ const formatEpisodeName = (index, title) => `פרק ${index}: ${title}`
 const sanitizeFileName = (name) =>
   name.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim()
 
-const findCaptionTracks = (node) => {
-  if (!node || typeof node !== 'object') return null
-  if (Array.isArray(node.captionTracks)) return node.captionTracks
-  for (const value of Object.values(node)) {
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        const found = findCaptionTracks(item)
-        if (found) return found
-      }
-    } else if (value && typeof value === 'object') {
-      const found = findCaptionTracks(value)
-      if (found) return found
-    }
-  }
-  return null
-}
-
-const extractJsonMarker = (html, marker) => {
-  const start = html.indexOf(marker)
-  if (start === -1) return null
-
-  const jsonStart = start + marker.length
-  let depth = 0
-  let inString = false
-  let escaped = false
-
-  for (let i = jsonStart; i < html.length; i++) {
-    const char = html[i]
-    if (inString) {
-      if (escaped) escaped = false
-      else if (char === '\\') escaped = true
-      else if (char === '"') inString = false
-      continue
-    }
-    if (char === '"') {
-      inString = true
-      continue
-    }
-    if (char === '{') depth++
-    if (char === '}') {
-      depth--
-      if (depth === 0) {
-        try {
-          return JSON.parse(html.slice(jsonStart, i + 1))
-        } catch {
-          return null
-        }
-      }
-    }
-  }
-  return null
-}
-
-const normalizeTrack = (track) => ({
-  lang: track.languageCode,
-  name: track.name?.simpleText || track.name?.runs?.[0]?.text || track.languageCode,
-  baseUrl: track.baseUrl?.replace(/\\u0026/g, '&'),
-  isAuto: Boolean(track.kind === 'asr' || track.vssId?.startsWith?.('a.')),
-})
-
-const normalizeTranslationLanguage = (language) => ({
-  lang: language.languageCode,
-  name: language.languageName?.simpleText || language.languageName?.runs?.[0]?.text || language.languageCode,
-})
-
-const fetchCaptionTracksInnertube = async (videoId) => {
-  const response = await axios.post(
-    'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
-    {
-      context: {
-        client: {
-          clientName: 'ANDROID',
-          clientVersion: '20.10.38',
-        },
-      },
-      videoId,
-    },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)',
-      },
-    },
-  )
-
-  const renderer = response.data?.captions?.playerCaptionsTracklistRenderer || {}
-  const tracks = renderer.captionTracks || []
-  const translationLanguages = renderer.translationLanguages || []
-  return {
-    tracks: tracks.map(normalizeTrack),
-    translationLanguages: translationLanguages.map(normalizeTranslationLanguage),
-  }
-}
-
-const getCaptionTrackInfo = async (videoId) => {
-  try {
-    const innertubeInfo = await fetchCaptionTracksInnertube(videoId)
-    if (innertubeInfo.tracks.length) return innertubeInfo
-  } catch {
-    // Fall back to watch page parsing.
-  }
-
-  const watchUrl = `https://www.youtube.com/watch?v=${videoId}`
-  const response = await axios.get(watchUrl, { headers: YOUTUBE_HEADERS })
-  const html = response.data
-
-  const playerResponse = extractJsonMarker(html, 'var ytInitialPlayerResponse = ')
-  const playerRenderer = playerResponse?.captions?.playerCaptionsTracklistRenderer || {}
-  const playerTracks = playerRenderer.captionTracks || []
-  const playerTranslationLanguages = playerRenderer.translationLanguages || []
-
-  if (playerTracks.length) {
-    return {
-      tracks: playerTracks.map(normalizeTrack),
-      translationLanguages: playerTranslationLanguages.map(normalizeTranslationLanguage),
-    }
-  }
-
-  const initialData = extractYtInitialData(html)
-  const tracks = findCaptionTracks(initialData) || []
-  return {
-    tracks: tracks.map(normalizeTrack),
-    translationLanguages: [],
-  }
-}
-
 const getCaptionTracks = async (videoId) => {
   const info = await getCaptionTrackInfo(videoId)
   return info.tracks
@@ -402,11 +304,20 @@ const transcriptToVtt = (segments) => {
 
 const pickSourceTrack = (tracks, lang) => {
   if (!tracks.length) return null
-  if (lang && lang !== 'auto') {
-    return tracks.find((track) => track.lang === lang) || null
+
+  const matchesLang = (track, requestedLang) => {
+    if (requestedLang === 'he') return track.lang === 'he' || track.lang === 'iw'
+    if (requestedLang === 'iw') return track.lang === 'he' || track.lang === 'iw'
+    return track.lang === requestedLang
   }
 
-  const manualHebrew = tracks.find((track) => track.lang === 'he' && !track.isAuto)
+  if (lang && lang !== 'auto') {
+    return tracks.find((track) => matchesLang(track, lang)) || null
+  }
+
+  const manualHebrew = tracks.find(
+    (track) => (track.lang === 'he' || track.lang === 'iw') && !track.isAuto,
+  )
   if (manualHebrew) return manualHebrew
 
   const manualEnglish = tracks.find((track) => track.lang === 'en' && !track.isAuto)
@@ -440,26 +351,6 @@ const vttToSrt = (vtt) => {
   }
 
   return srt.trim()
-}
-
-const fetchTrackSubtitleContent = async (sourceTrack, { tlang, fmt = 'vtt' } = {}) => {
-  if (!sourceTrack?.baseUrl) return ''
-
-  const subtitleUrl = new URL(sourceTrack.baseUrl)
-  subtitleUrl.searchParams.set('fmt', fmt === 'srt' ? 'srt' : 'vtt')
-  if (tlang && tlang !== 'none') {
-    subtitleUrl.searchParams.set('tlang', tlang)
-  }
-
-  try {
-    const response = await axios.get(subtitleUrl.toString(), {
-      headers: YOUTUBE_HEADERS,
-      responseType: 'text',
-    })
-    return response.data
-  } catch {
-    return ''
-  }
 }
 
 const storeTranslatedSubtitle = (videoId, sourceLang, tlang, content) => {
@@ -500,6 +391,8 @@ const resolveSubtitleVariant = async (source, videoId, tlang = 'none') => {
     const youtubeTranslated = await fetchTrackSubtitleContent(source.sourceTrack, {
       tlang: targetLang,
       fmt: 'vtt',
+      userAgent: source.clientUserAgent,
+      preferPubProxy: preferYouTubePubProxy,
     })
 
     if (youtubeTranslated && String(youtubeTranslated).trim()) {
@@ -590,26 +483,31 @@ const prefetchSubtitleLanguages = async (
 }
 
 const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' } = {}) => {
-  const tracks = await getCaptionTracks(videoId)
+  const trackInfo = await getCaptionTrackInfo(videoId, { preferPubProxy: preferYouTubePubProxy })
+  const tracks = trackInfo.tracks
   const sourceTrack = pickSourceTrack(tracks, lang)
   let content = ''
   let sourceLang = sourceTrack?.lang || lang
   let sourceName = sourceTrack?.name || sourceLang
 
   if (sourceTrack?.baseUrl) {
-    content = await fetchTrackSubtitleContent(sourceTrack, { fmt })
+    content = await fetchTrackSubtitleContent(sourceTrack, {
+      fmt,
+      userAgent: trackInfo.clientUserAgent,
+      preferPubProxy: preferYouTubePubProxy,
+    })
   }
 
   if (!content || !String(content).trim()) {
     try {
-      const transcriptLang = lang && lang !== 'auto' ? { lang } : {}
-      const segments = await YoutubeTranscript.fetchTranscript(videoId, transcriptLang)
+      const segments = await fetchTranscriptSegments(videoId, { lang })
       if (!segments?.length) {
         throw new Error('לא נמצאו כתוביות לסרטון זה')
       }
       sourceLang = segments[0]?.lang || sourceLang
       content = transcriptToVtt(segments)
-    } catch {
+    } catch (error) {
+      if (error instanceof YouTubeBlockedError) throw error
       throw new Error('לא נמצאו כתוביות לסרטון זה')
     }
   }
@@ -624,6 +522,7 @@ const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' 
     sourceName,
     tracks,
     sourceTrack,
+    clientUserAgent: trackInfo.clientUserAgent,
   }
 }
 
@@ -894,7 +793,7 @@ app.get('/api/youtube/subtitles/:videoId/tracks', async (req, res) => {
     const info = await getCaptionTrackInfo(req.params.videoId)
     return res.json(info)
   } catch (error) {
-    return handleApiError(res, error)
+    return handleSubtitleApiError(res, error)
   }
 })
 
@@ -914,10 +813,7 @@ app.post('/api/youtube/subtitles/prefetch', async (req, res) => {
     const payload = await prefetchSubtitleLanguages(videoId, { lang, langs, priorityLang })
     return res.json(payload)
   } catch (error) {
-    if (error.message?.includes('לא נמצאו') || error.message?.includes('ריקות')) {
-      return res.status(404).json({ message: error.message })
-    }
-    return handleApiError(res, error)
+    return handleSubtitleApiError(res, error)
   }
 })
 
@@ -939,10 +835,7 @@ app.post('/api/youtube/subtitles', async (req, res) => {
       ...subtitle,
     })
   } catch (error) {
-    if (error.message?.includes('לא נמצאו') || error.message?.includes('ריקות')) {
-      return res.status(404).json({ message: error.message })
-    }
-    return handleApiError(res, error)
+    return handleSubtitleApiError(res, error)
   }
 })
 
