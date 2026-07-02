@@ -13,6 +13,8 @@ services:
       - key: USE_PUBPROXY
         value: true
       - key: PUBPROXY_MAX_ATTEMPTS
-        value: 6
+        value: 8
+      - key: PROXY_PARALLEL_BATCH
+        value: 4
       - key: YOUTUBE_PROXY_URL
         sync: false
