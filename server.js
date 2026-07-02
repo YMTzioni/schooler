@@ -662,8 +662,8 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'schooler-local-bridge',
-    version: '1.3.1',
-    features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status'],
+    version: '1.3.2',
+    features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status', 'subtitle-translate'],
   })
 })
 
@@ -843,6 +843,39 @@ app.get('/api/youtube/subtitles/:videoId/tracks', async (req, res) => {
   try {
     const info = await getCaptionTrackInfo(req.params.videoId)
     return res.json(info)
+  } catch (error) {
+    return handleSubtitleApiError(res, error)
+  }
+})
+
+app.post('/api/youtube/subtitles/translate', async (req, res) => {
+  try {
+    const { content, sourceLang = 'auto', targetLang } = req.body
+    if (!content) {
+      return res.status(400).json({ message: 'חסר תוכן כתוביות' })
+    }
+    if (!targetLang || targetLang === 'none') {
+      return res.status(400).json({ message: 'חסרה שפת יעד לתרגום' })
+    }
+
+    const result = await translateVttContent(content, sourceLang, targetLang)
+    const cueCount = parseVttCues(result.content).length
+
+    return res.json({
+      content: result.content,
+      translatedLocally: result.translatedLocally,
+      status: {
+        state: 'ready',
+        message: result.translatedLocally
+          ? `תרגום מקומי ל${targetLang} · ${cueCount} שורות`
+          : `${cueCount} שורות ללא תרגום`,
+        cueCount,
+        targetLang,
+        translatedLocally: result.translatedLocally,
+        delivery: 'server-translate',
+        checkedAt: new Date().toISOString(),
+      },
+    })
   } catch (error) {
     return handleSubtitleApiError(res, error)
   }

@@ -3,7 +3,6 @@ import Plyr from 'plyr'
 import 'plyr/dist/plyr.css'
 import { getActiveCue, parseVtt } from '../utils/vtt.js'
 import { PLAYER_TRANSLATION_LANGUAGES } from '../constants/subtitleLanguages.js'
-import { API_BASE } from '../config/api.js'
 import { prefetchCaptionsForVideo, readCachedCaption } from '../utils/captionPrefetch.js'
 import { getPrefetchPromise, setCachedCaption } from '../utils/captionCache.js'
 import {
@@ -173,40 +172,11 @@ function normalizeCueTimesForPlayback(cues, playerDuration) {
   }))
 }
 
-async function fetchCaptionsFromApi({ videoId, index, title, sourceLang, targetLang, format }) {
-  const response = await fetch(`${API_BASE}/youtube/subtitles`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
-      videoId,
-      index,
-      title,
-      lang: sourceLang,
-      tlang: targetLang,
-      fmt: format,
-    }),
+async function loadCaptionsFromBrowser({ videoId, sourceLang, targetLang }) {
+  return fetchCaptionsInBrowser(videoId, {
+    lang: sourceLang,
+    tlang: targetLang,
   })
-
-  const rawText = await response.text()
-  let data = null
-  try {
-    data = rawText ? JSON.parse(rawText) : null
-  } catch {
-    throw new Error('תגובת שרת לא תקינה לכתוביות')
-  }
-
-  if (!response.ok) {
-    const error = new Error(data?.message || `שגיאה בטעינת כתוביות (${response.status})`)
-    error.code = data?.code || null
-    throw error
-  }
-
-  return {
-    content: data.content,
-    translatedLocally: Boolean(data.translatedLocally),
-    status: data.status || null,
-  }
 }
 
 function applyCaptionContent({ content, translatedLocally, playerDuration }) {
@@ -228,9 +198,9 @@ function CaptionStatusBar({ status }) {
         <strong className="caption-status-bar__title">
           {status.state === 'loading' && 'טוען כתוביות'}
           {status.state === 'prefetching' && 'מכין כתוביות'}
-          {status.state === 'ready' && 'כתוביות פעילות'}
+          {status.state === 'ready' && status.delivery !== 'browser' && 'כתוביות פעילות'}
           {status.state === 'cached' && 'כתוביות מהזיכרון'}
-          {status.delivery === 'browser' && 'כתוביות מהדפדפן'}
+          {(status.state === 'ready' || status.state === 'cached') && status.delivery === 'browser' && 'כתוביות מהדפדפן'}
           {status.state === 'partial' && 'כתוביות חלקיות'}
           {status.state === 'error' && 'שגיאת כתוביות'}
           {status.state === 'blocked' && 'כתוביות חסומות'}
@@ -450,7 +420,7 @@ function PlyrEmbed({
       : 'none'
     const needsTranslation = playerTargetLang !== 'none'
 
-    emitCaptionStatus(buildLoadingCaptionStatus('בודק כתוביות…'))
+    emitCaptionStatus(buildLoadingCaptionStatus('בודק כתוביות מהדפדפן…'))
 
     const applyLoadedCaptions = (subtitle, { cached = false } = {}) => {
       const playerDuration = Number(playerRef.current?.duration) || 0
@@ -484,7 +454,7 @@ function PlyrEmbed({
       if (player) {
         updateSettingsValue(player, 'captions', 'מכין כתוביות…')
       }
-      emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות לכל השפות…'))
+      emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהדפדפן…'))
       try {
         const prefetchResult = await inflightPrefetch
         emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
@@ -505,17 +475,14 @@ function PlyrEmbed({
       updateSettingsValue(player, 'captions', 'מתרגם כתוביות…')
     }
     emitCaptionStatus(
-      buildLoadingCaptionStatus(needsTranslation ? 'מתרגם כתוביות…' : 'מוריד כתוביות מהשרת…'),
+      buildLoadingCaptionStatus(needsTranslation ? 'מתרגם כתוביות…' : 'מוריד כתוביות מהדפדפן…'),
     )
 
     try {
-      const subtitle = await fetchCaptionsFromApi({
+      const subtitle = await loadCaptionsFromBrowser({
         videoId: currentVideoId,
-        index: episodeIndex,
-        title,
         sourceLang,
         targetLang: playerTargetLang,
-        format: 'vtt',
       })
 
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
@@ -530,41 +497,20 @@ function PlyrEmbed({
     } catch (error) {
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
 
-      const canTryBrowser =
-        error?.code === 'YOUTUBE_BLOCKED' ||
-        String(error?.message || '').includes('YouTube') ||
-        String(error?.message || '').includes('פרוקסי')
-
-      if (canTryBrowser) {
-        try {
-          emitCaptionStatus(buildLoadingCaptionStatus('מנסה מהדפדפן שלך…'))
-          const browserSubtitle = await fetchCaptionsInBrowser(currentVideoId, { lang: sourceLang })
-          if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
-
-          setCachedCaption(currentVideoId, playerTargetLang, browserSubtitle)
-          return applyLoadedCaptions(browserSubtitle)
-        } catch (browserError) {
-          emitCaptionStatus(buildErrorCaptionStatus(browserError.message))
-          console.warn('כתוביות מהדפדפן:', browserError.message)
-        }
-      }
-
       cuesRef.current = []
       captionsOnRef.current = false
       setCaptionsOn(false)
       syncCaptionOverlay()
       refreshCaptionsSettingsMenu()
       emitCaptionStatus(buildErrorCaptionStatus(error.message))
-      console.warn('כתוביות:', error.message)
+      console.warn('כתוביות מהדפדפן:', error.message)
       return false
     }
   }, [
-    episodeIndex,
     emitCaptionStatus,
     refreshCaptionsSettingsMenu,
     sourceLang,
     syncCaptionOverlay,
-    title,
   ])
 
   useEffect(() => {
@@ -587,7 +533,7 @@ function PlyrEmbed({
     setCaptionsOn(showCaptions)
     cuesRef.current = []
     translatedLocallyRef.current = false
-    emitCaptionStatus(buildLoadingCaptionStatus('מתחיל הכנת כתוביות…'))
+    emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהדפדפן…'))
 
     translationOptionsRef.current = PLAYER_TRANSLATION_LANGUAGES
     refreshCaptionsSettingsMenu()
@@ -617,12 +563,8 @@ function PlyrEmbed({
       })
       .catch((error) => {
         if (prefetchId !== prefetchRequestIdRef.current) return
-        if (error?.code === 'YOUTUBE_BLOCKED') {
-          emitCaptionStatus(buildLoadingCaptionStatus('השרת נחסם — הכתוביות ייטענו מהדפדפן'))
-          return
-        }
         emitCaptionStatus(buildErrorCaptionStatus(error.message))
-        console.warn('הכנת כתוביות:', error.message)
+        console.warn('הכנת כתוביות מהדפדפן:', error.message)
       })
 
     if (showCaptions) {
