@@ -7,6 +7,7 @@
     "dev": "vite",
     "api": "node server.js",
     "start": "concurrently -n api,web -c blue,green \"npm run api\" \"npm run dev\"",
+    "start:prod": "node server.js",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview"

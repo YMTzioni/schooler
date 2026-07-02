@@ -4,6 +4,8 @@ import cors from 'cors'
 import axios from 'axios'
 import cookieParser from 'cookie-parser'
 import crypto from 'node:crypto'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { YoutubeTranscript } from 'youtube-transcript'
 import {
   parseVttCues,
@@ -16,13 +18,21 @@ const app = express()
 const PORT = process.env.PORT || 3030
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
 const BASE_URL = 'https://api.schooler.biz'
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const distPath = path.join(__dirname, 'dist')
+const isProduction = process.env.NODE_ENV === 'production'
 
 const isAllowedOrigin = (origin) => {
   if (!origin) return true
   if (origin === FRONTEND_ORIGIN) return true
   try {
     const { hostname, protocol } = new URL(origin)
-    return protocol === 'https:' && (hostname === 'localhost' || hostname.endsWith('.github.io'))
+    return (
+      protocol === 'https:' &&
+      (hostname === 'localhost' ||
+        hostname.endsWith('.github.io') ||
+        hostname.endsWith('.onrender.com'))
+    )
   } catch {
     return false
   }
@@ -981,6 +991,14 @@ app.use('/api', (req, res) => {
   })
 })
 
+if (isProduction) {
+  app.use(express.static(distPath))
+  app.get(/^(?!\/api).*/, (_req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'))
+  })
+}
+
 app.listen(PORT, () => {
-  console.log(`Schooler local bridge listening on http://localhost:${PORT}`)
+  const mode = isProduction ? 'production' : 'development'
+  console.log(`Schooler listening on port ${PORT} (${mode})`)
 })
