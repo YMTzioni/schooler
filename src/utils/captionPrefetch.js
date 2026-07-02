@@ -42,6 +42,7 @@ export async function prefetchCaptionsForVideo({
       setCachedCaption(videoId, targetLang, {
         content: subtitle.content,
         translatedLocally: Boolean(subtitle.translatedLocally),
+        status: subtitle.status || null,
       })
     })
 

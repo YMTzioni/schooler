@@ -15,11 +15,13 @@ import {
 import {
   YOUTUBE_HEADERS,
   YouTubeBlockedError,
+  createSubtitleFetchMeta,
   fetchTrackSubtitleContent,
   fetchTranscriptSegments,
   getCaptionTrackInfo,
   isBlockedYouTubeResponse,
 } from './lib/youtubeCaptions.js'
+import { buildPrefetchStatus, buildSubtitleStatus } from './lib/subtitleStatus.js'
 
 const app = express()
 const PORT = process.env.PORT || 3030
@@ -447,6 +449,13 @@ const prefetchSubtitleLanguages = async (
       content: source.content,
       translatedLocally: false,
       targetLang: tlang === 'none' ? null : tlang,
+      status: buildSubtitleStatus({
+        meta: source.fetchMeta,
+        content: source.content,
+        sourceLang: source.sourceLang,
+        targetLang: tlang,
+        translatedLocally: false,
+      }),
     }
   })
 
@@ -463,27 +472,56 @@ const prefetchSubtitleLanguages = async (
   const parallelQueue = orderedTranslateLangs.filter((tlang) => tlang !== priorityLang)
 
   for (const tlang of priorityQueue) {
-    subtitles[tlang] = await resolveSubtitleVariant(source, videoId, tlang)
+    const variant = await resolveSubtitleVariant(source, videoId, tlang)
+    subtitles[tlang] = {
+      ...variant,
+      status: buildSubtitleStatus({
+        meta: source.fetchMeta,
+        content: variant.content,
+        sourceLang: source.sourceLang,
+        targetLang: variant.targetLang,
+        translatedLocally: variant.translatedLocally,
+      }),
+    }
   }
 
   if (parallelQueue.length) {
     const parallelResults = await Promise.all(
       parallelQueue.map(async (tlang) => [tlang, await resolveSubtitleVariant(source, videoId, tlang)]),
     )
-    parallelResults.forEach(([tlang, result]) => {
-      subtitles[tlang] = result
+    parallelResults.forEach(([tlang, variant]) => {
+      subtitles[tlang] = {
+        ...variant,
+        status: buildSubtitleStatus({
+          meta: source.fetchMeta,
+          content: variant.content,
+          sourceLang: source.sourceLang,
+          targetLang: variant.targetLang,
+          translatedLocally: variant.translatedLocally,
+        }),
+      }
     })
   }
+
+  const status = buildPrefetchStatus({
+    sourceLang: source.sourceLang,
+    subtitles,
+  })
 
   return {
     videoId,
     sourceLang: source.sourceLang,
     subtitles,
+    status,
   }
 }
 
 const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' } = {}) => {
-  const trackInfo = await getCaptionTrackInfo(videoId, { preferPubProxy: preferYouTubePubProxy })
+  const fetchMeta = createSubtitleFetchMeta()
+  const trackInfo = await getCaptionTrackInfo(videoId, {
+    preferPubProxy: preferYouTubePubProxy,
+    meta: fetchMeta,
+  })
   const tracks = trackInfo.tracks
   const sourceTrack = pickSourceTrack(tracks, lang)
   let content = ''
@@ -495,12 +533,13 @@ const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' 
       fmt,
       userAgent: trackInfo.clientUserAgent,
       preferPubProxy: preferYouTubePubProxy,
+      meta: fetchMeta,
     })
   }
 
   if (!content || !String(content).trim()) {
     try {
-      const segments = await fetchTranscriptSegments(videoId, { lang })
+      const segments = await fetchTranscriptSegments(videoId, { lang, meta: fetchMeta })
       if (!segments?.length) {
         throw new Error('לא נמצאו כתוביות לסרטון זה')
       }
@@ -523,6 +562,7 @@ const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' 
     tracks,
     sourceTrack,
     clientUserAgent: trackInfo.clientUserAgent,
+    fetchMeta,
   }
 }
 
@@ -536,6 +576,14 @@ const fetchSubtitleContent = async (videoId, { lang = 'auto', tlang, fmt = 'vtt'
     content = vttToSrt(String(content))
   }
 
+  const status = buildSubtitleStatus({
+    meta: source.fetchMeta,
+    content,
+    sourceLang: source.sourceLang,
+    targetLang: variant.targetLang,
+    translatedLocally: variant.translatedLocally,
+  })
+
   return {
     content,
     sourceLang: source.sourceLang,
@@ -544,6 +592,7 @@ const fetchSubtitleContent = async (videoId, { lang = 'auto', tlang, fmt = 'vtt'
     translatedLocally: variant.translatedLocally,
     format: fmt,
     availableTracks: source.tracks,
+    status,
   }
 }
 
@@ -611,8 +660,8 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'schooler-local-bridge',
-    version: '1.2.0',
-    features: ['youtube-playlist', 'youtube-subtitles'],
+    version: '1.3.0',
+    features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status'],
   })
 })
 

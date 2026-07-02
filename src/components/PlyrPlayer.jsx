@@ -6,6 +6,12 @@ import { PLAYER_TRANSLATION_LANGUAGES } from '../constants/subtitleLanguages.js'
 import { API_BASE } from '../config/api.js'
 import { prefetchCaptionsForVideo, readCachedCaption } from '../utils/captionPrefetch.js'
 import { getPrefetchPromise, setCachedCaption } from '../utils/captionCache.js'
+import {
+  buildErrorCaptionStatus,
+  buildLoadingCaptionStatus,
+  buildPrefetchCaptionStatus,
+  normalizeApiCaptionStatus,
+} from '../utils/subtitleStatus.js'
 
 const YT_QUALITY_LABELS = {
   auto: 'אוטומטי',
@@ -196,6 +202,7 @@ async function fetchCaptionsFromApi({ videoId, index, title, sourceLang, targetL
   return {
     content: data.content,
     translatedLocally: Boolean(data.translatedLocally),
+    status: data.status || null,
   }
 }
 
@@ -208,6 +215,37 @@ function applyCaptionContent({ content, translatedLocally, playerDuration }) {
   return { cues, translatedLocally: Boolean(translatedLocally) }
 }
 
+function CaptionStatusBar({ status }) {
+  if (!status?.state || status.state === 'idle') return null
+
+  return (
+    <div className={`caption-status-bar caption-status-bar--${status.state}`} role="status" aria-live="polite">
+      <span className="caption-status-bar__dot" aria-hidden="true" />
+      <div className="caption-status-bar__body">
+        <strong className="caption-status-bar__title">
+          {status.state === 'loading' && 'טוען כתוביות'}
+          {status.state === 'prefetching' && 'מכין כתוביות'}
+          {status.state === 'ready' && 'כתוביות פעילות'}
+          {status.state === 'cached' && 'כתוביות מהזיכרון'}
+          {status.state === 'partial' && 'כתוביות חלקיות'}
+          {status.state === 'error' && 'שגיאת כתוביות'}
+          {status.state === 'blocked' && 'כתוביות חסומות'}
+        </strong>
+        <p className="caption-status-bar__message">{status.message}</p>
+        {status.cueCount > 0 && (
+          <p className="caption-status-bar__meta">
+            {status.cueCount} שורות
+            {status.delivery === 'pubproxy'
+              ? ` · PubProxy${status.proxyCountry ? ` (${status.proxyCountry})` : ''}`
+              : ''}
+            {status.checkedAt ? ` · ${new Date(status.checkedAt).toLocaleTimeString('he-IL')}` : ''}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function PlyrEmbed({
   videoId,
   title,
@@ -217,6 +255,7 @@ function PlyrEmbed({
   sourceLang,
   targetLang,
   format,
+  onCaptionStatusChange,
 }) {
   const reactId = useId().replace(/:/g, '')
   const playerId = `plyr-player-${videoId}-${reactId}`
@@ -240,6 +279,13 @@ function PlyrEmbed({
         : 'none',
   )
   const [captionsOn, setCaptionsOn] = useState(showCaptions)
+
+  const emitCaptionStatus = useCallback(
+    (status) => {
+      onCaptionStatusChange?.(status)
+    },
+    [onCaptionStatusChange],
+  )
 
   const getCaptionLabel = useCallback(() => {
     const currentTranslateLang = playerTranslateLangRef.current
@@ -398,7 +444,9 @@ function PlyrEmbed({
       : 'none'
     const needsTranslation = playerTargetLang !== 'none'
 
-    const applyLoadedCaptions = (subtitle) => {
+    emitCaptionStatus(buildLoadingCaptionStatus('בודק כתוביות…'))
+
+    const applyLoadedCaptions = (subtitle, { cached = false } = {}) => {
       const playerDuration = Number(playerRef.current?.duration) || 0
       const applied = applyCaptionContent({
         content: subtitle.content,
@@ -409,13 +457,20 @@ function PlyrEmbed({
       cuesRef.current = applied.cues
       refreshCaptionsSettingsMenu()
       syncCaptionOverlay()
+      emitCaptionStatus(
+        normalizeApiCaptionStatus(subtitle.status, { cached }) || {
+          state: 'ready',
+          message: `${applied.cues.length} שורות כתוביות נטענו`,
+          cueCount: applied.cues.length,
+        },
+      )
       return true
     }
 
     const cached = readCachedCaption(currentVideoId, playerTargetLang)
     if (cached?.content) {
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
-      return applyLoadedCaptions(cached)
+      return applyLoadedCaptions(cached, { cached: true })
     }
 
     const inflightPrefetch = getPrefetchPromise(currentVideoId)
@@ -423,15 +478,18 @@ function PlyrEmbed({
       if (player) {
         updateSettingsValue(player, 'captions', 'מכין כתוביות…')
       }
+      emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות לכל השפות…'))
       try {
-        await inflightPrefetch
+        const prefetchResult = await inflightPrefetch
+        emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
         const prefetched = readCachedCaption(currentVideoId, playerTargetLang)
         if (prefetched?.content) {
           if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
-          return applyLoadedCaptions(prefetched)
+          return applyLoadedCaptions(prefetched, { cached: true })
         }
       } catch (error) {
         if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
+        emitCaptionStatus(buildErrorCaptionStatus(error.message))
         console.warn('כתוביות:', error.message)
         return false
       }
@@ -440,6 +498,9 @@ function PlyrEmbed({
     if (player && needsTranslation) {
       updateSettingsValue(player, 'captions', 'מתרגם כתוביות…')
     }
+    emitCaptionStatus(
+      buildLoadingCaptionStatus(needsTranslation ? 'מתרגם כתוביות…' : 'מוריד כתוביות מהשרת…'),
+    )
 
     try {
       const subtitle = await fetchCaptionsFromApi({
@@ -456,6 +517,7 @@ function PlyrEmbed({
       setCachedCaption(currentVideoId, playerTargetLang, {
         content: subtitle.content,
         translatedLocally: subtitle.translatedLocally,
+        status: subtitle.status,
       })
 
       return applyLoadedCaptions(subtitle)
@@ -467,10 +529,18 @@ function PlyrEmbed({
       setCaptionsOn(false)
       syncCaptionOverlay()
       refreshCaptionsSettingsMenu()
+      emitCaptionStatus(buildErrorCaptionStatus(error.message))
       console.warn('כתוביות:', error.message)
       return false
     }
-  }, [episodeIndex, refreshCaptionsSettingsMenu, sourceLang, syncCaptionOverlay, title])
+  }, [
+    episodeIndex,
+    emitCaptionStatus,
+    refreshCaptionsSettingsMenu,
+    sourceLang,
+    syncCaptionOverlay,
+    title,
+  ])
 
   useEffect(() => {
     loadCaptionsRef.current = loadCaptions
@@ -492,6 +562,7 @@ function PlyrEmbed({
     setCaptionsOn(showCaptions)
     cuesRef.current = []
     translatedLocallyRef.current = false
+    emitCaptionStatus(buildLoadingCaptionStatus('מתחיל הכנת כתוביות…'))
 
     translationOptionsRef.current = PLAYER_TRANSLATION_LANGUAGES
     refreshCaptionsSettingsMenu()
@@ -512,14 +583,16 @@ function PlyrEmbed({
     })
 
     prefetchPromise
-      .then(() => {
+      .then((prefetchResult) => {
         if (prefetchId !== prefetchRequestIdRef.current || videoIdRef.current !== videoId) return
+        emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
         if (!showCaptions || !captionsOnRef.current) return
         if (cuesRef.current.length) return
         loadCaptionsRef.current?.(playerTranslateLangRef.current)
       })
       .catch((error) => {
         if (prefetchId !== prefetchRequestIdRef.current) return
+        emitCaptionStatus(buildErrorCaptionStatus(error.message))
         console.warn('הכנת כתוביות:', error.message)
       })
 
@@ -544,6 +617,7 @@ function PlyrEmbed({
     format,
     showCaptions,
     captionLang,
+    emitCaptionStatus,
     refreshCaptionsSettingsMenu,
     syncCaptionOverlay,
   ])
@@ -665,9 +739,23 @@ function PlyrEmbed({
 }
 
 export default function PlyrPlayer(props) {
+  const { onCaptionStatusChange, ...embedProps } = props
+  const [captionStatus, setCaptionStatus] = useState(null)
+
+  const handleCaptionStatus = useCallback(
+    (status) => {
+      setCaptionStatus(status)
+      onCaptionStatusChange?.(status)
+    },
+    [onCaptionStatusChange],
+  )
+
   return (
-    <div className="plyr-player-wrap">
-      <PlyrEmbed key={props.videoId} {...props} />
+    <div className="plyr-player-shell">
+      <div className="plyr-player-wrap">
+        <PlyrEmbed key={embedProps.videoId} {...embedProps} onCaptionStatusChange={handleCaptionStatus} />
+      </div>
+      <CaptionStatusBar status={captionStatus} />
     </div>
   )
 }

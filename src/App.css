@@ -114,6 +114,11 @@ pre {
   margin: 0 0 0.7rem;
 }
 
+.plyr-player-shell {
+  display: grid;
+  gap: 0.55rem;
+}
+
 .plyr-player-wrap {
   position: relative;
   width: 100%;
@@ -176,6 +181,86 @@ pre {
   bottom: 10%;
   font-size: clamp(1.05rem, 2.1vw, 1.4rem);
   z-index: 120;
+}
+
+.caption-status-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #27324d;
+  background: #0a1120;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.caption-status-bar__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  margin-top: 0.35rem;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+.caption-status-bar__title {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.caption-status-bar__message,
+.caption-status-bar__meta {
+  margin: 0;
+}
+
+.caption-status-bar__meta {
+  margin-top: 0.2rem;
+  font-size: 0.82rem;
+  opacity: 0.9;
+}
+
+.caption-status-bar--loading,
+.caption-status-bar--prefetching {
+  border-color: #4f6db8;
+  color: #a7b8e6;
+}
+
+.caption-status-bar--ready {
+  border-color: #2f7d4d;
+  color: #94f7a4;
+}
+
+.caption-status-bar--cached {
+  border-color: #3d5f9a;
+  color: #b8c9f5;
+}
+
+.caption-status-bar--partial {
+  border-color: #9a7a2f;
+  color: #f7d994;
+}
+
+.caption-status-bar--error,
+.caption-status-bar--blocked {
+  border-color: #8a3b3b;
+  color: #ff8f8f;
+}
+
+.caption-live-status--ready,
+.caption-live-status--cached {
+  color: #94f7a4;
+}
+
+.caption-live-status--loading,
+.caption-live-status--prefetching,
+.caption-live-status--partial {
+  color: #a7b8e6;
+}
+
+.caption-live-status--error,
+.caption-live-status--blocked {
+  color: #ff8f8f;
 }
 
 .episode-list {

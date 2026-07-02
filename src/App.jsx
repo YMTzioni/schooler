@@ -99,8 +99,13 @@ function App() {
   const [subtitleSettings, setSubtitleSettings] = useState(loadSubtitleSettings)
   const [subtitleLoading, setSubtitleLoading] = useState(false)
   const [subtitleStatus, setSubtitleStatus] = useState('')
+  const [liveCaptionStatus, setLiveCaptionStatus] = useState(null)
 
   const activeEpisode = playlistResult?.videos?.[activeEpisodeIndex] ?? null
+
+  useEffect(() => {
+    setLiveCaptionStatus(null)
+  }, [activeEpisode?.videoId])
 
   const prettyResponse = useMemo(() => {
     if (!dashboard.response) return ''
@@ -240,7 +245,7 @@ function App() {
       }),
     })
     downloadTextFile(data.content, data.fileName)
-    return data.fileName
+    return { fileName: data.fileName, status: data.status }
   }
 
   const downloadCurrentSubtitle = async () => {
@@ -248,8 +253,8 @@ function App() {
     setSubtitleLoading(true)
     setSubtitleStatus('')
     try {
-      const fileName = await downloadSubtitleForVideo(activeEpisode)
-      setSubtitleStatus(`הורדה הושלמה: ${fileName}`)
+      const result = await downloadSubtitleForVideo(activeEpisode)
+      setSubtitleStatus(result.status?.message || `הורדה הושלמה: ${result.fileName}`)
     } catch (error) {
       setSubtitleStatus(error.message)
     } finally {
@@ -267,9 +272,12 @@ function App() {
     try {
       for (const video of playlistResult.videos) {
         try {
-          const fileName = await downloadSubtitleForVideo(video)
+          const result = await downloadSubtitleForVideo(video)
           successCount += 1
-          setSubtitleStatus(`הורד ${fileName} (${successCount}/${playlistResult.videos.length})`)
+          setSubtitleStatus(
+            result.status?.message ||
+              `הורד ${result.fileName} (${successCount}/${playlistResult.videos.length})`,
+          )
           await new Promise((resolve) => setTimeout(resolve, 150))
         } catch (error) {
           failed.push({
@@ -414,6 +422,11 @@ function App() {
               </div>
             ) : null}
             {subtitleStatus && <p className="note">{subtitleStatus}</p>}
+            {liveCaptionStatus?.message && (
+              <p className={`note caption-live-status caption-live-status--${liveCaptionStatus.state}`}>
+                מעקב נגן: {liveCaptionStatus.message}
+              </p>
+            )}
             <p className="note">
               כתוביות, מהירות ואיכות וידאו נמצאים בתפריט ההגדרות (⚙) של הנגן.
             </p>
@@ -457,6 +470,7 @@ function App() {
                       sourceLang={subtitleSettings.sourceLang}
                       targetLang={subtitleSettings.targetLang}
                       format={subtitleSettings.format}
+                      onCaptionStatusChange={setLiveCaptionStatus}
                     />
                   </section>
                 )}
@@ -508,8 +522,8 @@ function App() {
                             setSubtitleLoading(true)
                             setSubtitleStatus('')
                             try {
-                              const fileName = await downloadSubtitleForVideo(video)
-                              setSubtitleStatus(`הורדה הושלמה: ${fileName}`)
+                              const result = await downloadSubtitleForVideo(video)
+                              setSubtitleStatus(result.status?.message || `הורדה הושלמה: ${result.fileName}`)
                             } catch (error) {
                               setSubtitleStatus(error.message)
                             } finally {
