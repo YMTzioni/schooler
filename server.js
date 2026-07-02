@@ -20,6 +20,7 @@ import {
   fetchTranscriptSegments,
   getCaptionTrackInfo,
   isBlockedYouTubeResponse,
+  runWithYouTubeProxySession,
 } from './lib/youtubeCaptions.js'
 import { buildPrefetchStatus, buildSubtitleStatus } from './lib/subtitleStatus.js'
 
@@ -516,55 +517,56 @@ const prefetchSubtitleLanguages = async (
   }
 }
 
-const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' } = {}) => {
-  const fetchMeta = createSubtitleFetchMeta()
-  const trackInfo = await getCaptionTrackInfo(videoId, {
-    preferPubProxy: preferYouTubePubProxy,
-    meta: fetchMeta,
-  })
-  const tracks = trackInfo.tracks
-  const sourceTrack = pickSourceTrack(tracks, lang)
-  let content = ''
-  let sourceLang = sourceTrack?.lang || lang
-  let sourceName = sourceTrack?.name || sourceLang
-
-  if (sourceTrack?.baseUrl) {
-    content = await fetchTrackSubtitleContent(sourceTrack, {
-      fmt,
-      userAgent: trackInfo.clientUserAgent,
+const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' } = {}) =>
+  runWithYouTubeProxySession(async () => {
+    const fetchMeta = createSubtitleFetchMeta()
+    const trackInfo = await getCaptionTrackInfo(videoId, {
       preferPubProxy: preferYouTubePubProxy,
       meta: fetchMeta,
     })
-  }
+    const tracks = trackInfo.tracks
+    const sourceTrack = pickSourceTrack(tracks, lang)
+    let content = ''
+    let sourceLang = sourceTrack?.lang || lang
+    let sourceName = sourceTrack?.name || sourceLang
 
-  if (!content || !String(content).trim()) {
-    try {
-      const segments = await fetchTranscriptSegments(videoId, { lang, meta: fetchMeta })
-      if (!segments?.length) {
+    if (sourceTrack?.baseUrl) {
+      content = await fetchTrackSubtitleContent(sourceTrack, {
+        fmt,
+        userAgent: trackInfo.clientUserAgent,
+        preferPubProxy: preferYouTubePubProxy,
+        meta: fetchMeta,
+      })
+    }
+
+    if (!content || !String(content).trim()) {
+      try {
+        const segments = await fetchTranscriptSegments(videoId, { lang, meta: fetchMeta })
+        if (!segments?.length) {
+          throw new Error('לא נמצאו כתוביות לסרטון זה')
+        }
+        sourceLang = segments[0]?.lang || sourceLang
+        content = transcriptToVtt(segments)
+      } catch (error) {
+        if (error instanceof YouTubeBlockedError) throw error
         throw new Error('לא נמצאו כתוביות לסרטון זה')
       }
-      sourceLang = segments[0]?.lang || sourceLang
-      content = transcriptToVtt(segments)
-    } catch (error) {
-      if (error instanceof YouTubeBlockedError) throw error
-      throw new Error('לא נמצאו כתוביות לסרטון זה')
     }
-  }
 
-  if (!content || !String(content).trim()) {
-    throw new Error('כתוביות ריקות או לא זמינות לסרטון זה')
-  }
+    if (!content || !String(content).trim()) {
+      throw new Error('כתוביות ריקות או לא זמינות לסרטון זה')
+    }
 
-  return {
-    content: String(content),
-    sourceLang,
-    sourceName,
-    tracks,
-    sourceTrack,
-    clientUserAgent: trackInfo.clientUserAgent,
-    fetchMeta,
-  }
-}
+    return {
+      content: String(content),
+      sourceLang,
+      sourceName,
+      tracks,
+      sourceTrack,
+      clientUserAgent: trackInfo.clientUserAgent,
+      fetchMeta,
+    }
+  }, { preferPubProxy: preferYouTubePubProxy })
 
 const fetchSubtitleContent = async (videoId, { lang = 'auto', tlang, fmt = 'vtt' } = {}) => {
   const source = await fetchSubtitleSourceContent(videoId, { lang, fmt: 'vtt' })
@@ -660,7 +662,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'schooler-local-bridge',
-    version: '1.3.0',
+    version: '1.3.1',
     features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status'],
   })
 })
