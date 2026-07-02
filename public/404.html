@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>schooler</title>
+    <script>
+      ;(function () {
+        const base = document.location.pathname.match(/.*\//)?.[0] || '/'
+        const target = base + 'index.html' + document.location.search + document.location.hash
+        document.location.replace(target)
+      })()
+    </script>
+  </head>
+  <body></body>
+</html>
