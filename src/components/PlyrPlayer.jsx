@@ -12,6 +12,7 @@ import {
   buildPrefetchCaptionStatus,
   normalizeApiCaptionStatus,
 } from '../utils/subtitleStatus.js'
+import { fetchCaptionsInBrowser } from '../utils/clientCaptions.js'
 
 const YT_QUALITY_LABELS = {
   auto: 'אוטומטי',
@@ -196,7 +197,9 @@ async function fetchCaptionsFromApi({ videoId, index, title, sourceLang, targetL
   }
 
   if (!response.ok) {
-    throw new Error(data?.message || `שגיאה בטעינת כתוביות (${response.status})`)
+    const error = new Error(data?.message || `שגיאה בטעינת כתוביות (${response.status})`)
+    error.code = data?.code || null
+    throw error
   }
 
   return {
@@ -227,6 +230,7 @@ function CaptionStatusBar({ status }) {
           {status.state === 'prefetching' && 'מכין כתוביות'}
           {status.state === 'ready' && 'כתוביות פעילות'}
           {status.state === 'cached' && 'כתוביות מהזיכרון'}
+          {status.delivery === 'browser' && 'כתוביות מהדפדפן'}
           {status.state === 'partial' && 'כתוביות חלקיות'}
           {status.state === 'error' && 'שגיאת כתוביות'}
           {status.state === 'blocked' && 'כתוביות חסומות'}
@@ -237,7 +241,9 @@ function CaptionStatusBar({ status }) {
             {status.cueCount} שורות
             {status.delivery === 'pubproxy'
               ? ` · PubProxy${status.proxyCountry ? ` (${status.proxyCountry})` : ''}`
-              : ''}
+              : status.delivery === 'browser'
+                ? ' · מהדפדפן'
+                : ''}
             {status.checkedAt ? ` · ${new Date(status.checkedAt).toLocaleTimeString('he-IL')}` : ''}
           </p>
         )}
@@ -524,6 +530,25 @@ function PlyrEmbed({
     } catch (error) {
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
 
+      const canTryBrowser =
+        error?.code === 'YOUTUBE_BLOCKED' ||
+        String(error?.message || '').includes('YouTube') ||
+        String(error?.message || '').includes('פרוקסי')
+
+      if (canTryBrowser) {
+        try {
+          emitCaptionStatus(buildLoadingCaptionStatus('מנסה מהדפדפן שלך…'))
+          const browserSubtitle = await fetchCaptionsInBrowser(currentVideoId, { lang: sourceLang })
+          if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
+
+          setCachedCaption(currentVideoId, playerTargetLang, browserSubtitle)
+          return applyLoadedCaptions(browserSubtitle)
+        } catch (browserError) {
+          emitCaptionStatus(buildErrorCaptionStatus(browserError.message))
+          console.warn('כתוביות מהדפדפן:', browserError.message)
+        }
+      }
+
       cuesRef.current = []
       captionsOnRef.current = false
       setCaptionsOn(false)
@@ -592,6 +617,10 @@ function PlyrEmbed({
       })
       .catch((error) => {
         if (prefetchId !== prefetchRequestIdRef.current) return
+        if (error?.code === 'YOUTUBE_BLOCKED') {
+          emitCaptionStatus(buildLoadingCaptionStatus('השרת נחסם — הכתוביות ייטענו מהדפדפן'))
+          return
+        }
         emitCaptionStatus(buildErrorCaptionStatus(error.message))
         console.warn('הכנת כתוביות:', error.message)
       })

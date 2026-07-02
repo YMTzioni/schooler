@@ -35,7 +35,9 @@ export async function prefetchCaptionsForVideo({
     }
 
     if (!response.ok) {
-      throw new Error(data?.message || `שגיאה בהכנת כתוביות (${response.status})`)
+      const error = new Error(data?.message || `שגיאה בהכנת כתוביות (${response.status})`)
+      error.code = data?.code || null
+      throw error
     }
 
     Object.entries(data.subtitles || {}).forEach(([targetLang, subtitle]) => {
