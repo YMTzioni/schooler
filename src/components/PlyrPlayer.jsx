@@ -13,6 +13,7 @@ import {
 } from '../utils/subtitleStatus.js'
 import { fetchCaptions } from '../utils/clientCaptions.js'
 import { isCloudHostedApp, isYouTubeBlockedError } from '../utils/cloudHost.js'
+import { enableNativeYouTubeCaptions, youtubeLangsMatch } from '../utils/youtubeNativeCaptions.js'
 import { YOUTUBE_PLYR_OPTIONS, attachYouTubeShields } from '../../lib/youtubeEmbed.js'
 
 const YT_QUALITY_LABELS = {
@@ -182,29 +183,10 @@ function normalizeCueTimesForPlayback(cues, playerDuration) {
   }))
 }
 
-async function enableNativeYouTubeCaptions(player, lang, { maxAttempts = 16, delayMs = 300 } = {}) {
-  const languageCode = toYouTubeCaptionLang(lang)
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const embed = player?.embed
-    if (embed?.loadModule && embed?.setOption) {
-      try {
-        embed.loadModule('captions')
-        embed.setOption('captions', 'track', { languageCode })
-        return true
-      } catch {
-        // YouTube iframe may not be ready yet.
-      }
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, delayMs))
-  }
-
-  return false
-}
-
 async function applyNativeCaptionFallback({
   player,
   targetLang,
+  sourceLang = 'auto',
   error = null,
   playerRef,
   nativeCaptionsRef,
@@ -214,27 +196,57 @@ async function applyNativeCaptionFallback({
   syncCaptionOverlay,
   refreshCaptionsSettingsMenu,
   emitCaptionStatus,
+  translatedLocallyRef,
 }) {
   const resolvedPlayer = player || playerRef.current
-  const nativeEnabled = await enableNativeYouTubeCaptions(resolvedPlayer, targetLang)
-  if (!nativeEnabled) return false
+  const result = await enableNativeYouTubeCaptions(resolvedPlayer, {
+    targetLang,
+    sourceLang,
+  })
+  if (!result.ok) return false
+
+  const wantsTranslation = targetLang && targetLang !== 'none'
+  const gotTranslation = wantsTranslation && result.translated
+  const sameLanguageOnly =
+    wantsTranslation &&
+    result.track &&
+    youtubeLangsMatch(result.track.languageCode, sourceLang)
 
   nativeCaptionsRef.current = true
+  translatedLocallyRef.current = false
   cuesRef.current = []
   captionsOnRef.current = true
   setCaptionsOn(true)
   syncCaptionOverlay()
   refreshCaptionsSettingsMenu()
-  if (resolvedPlayer) {
-    updateSettingsValue(resolvedPlayer, 'captions', 'YouTube מובנה')
+
+  const targetLabel = getTranslationLabel(targetLang, PLAYER_TRANSLATION_LANGUAGES)
+  let message = 'כתוביות מובנות של YouTube'
+  if (gotTranslation) {
+    message = `תרגום YouTube ל${targetLabel}`
+  } else if (wantsTranslation && sameLanguageOnly) {
+    message = `שפת מקור (${targetLabel}) — אין תרגום נפרד לסרטון זה`
+  } else if (wantsTranslation) {
+    message = `מנסה ${targetLabel} — ייתכן שיוצגו כתוביות מקור בלבד`
+  } else if (isYouTubeBlockedError(error)) {
+    message = 'כתוביות מובנות של YouTube (השרת בענן חסום)'
   }
+
+  if (resolvedPlayer) {
+    updateSettingsValue(
+      resolvedPlayer,
+      'captions',
+      gotTranslation ? `תרגום YouTube: ${targetLabel}` : wantsTranslation ? targetLabel : 'שפת מקור',
+    )
+  }
+
   emitCaptionStatus({
-    state: 'ready',
-    message: isYouTubeBlockedError(error)
-      ? 'כתוביות מובנות של YouTube (השרת בענן חסום)'
-      : 'כתוביות מובנות של YouTube',
+    state: gotTranslation ? 'ready' : sameLanguageOnly ? 'partial' : 'ready',
+    message,
     delivery: 'youtube-native',
     cueCount: 0,
+    targetLang: wantsTranslation ? targetLang : null,
+    translatedLocally: false,
   })
   return true
 }
@@ -334,7 +346,11 @@ function PlyrEmbed({
   const getCaptionLabel = useCallback(() => {
     const currentTranslateLang = playerTranslateLangRef.current
     if (currentTranslateLang && currentTranslateLang !== 'none') {
-      const prefix = translatedLocallyRef.current ? 'תרגום מקומי' : 'תרגום'
+      const prefix = translatedLocallyRef.current
+        ? 'תרגום מקומי'
+        : nativeCaptionsRef.current
+          ? 'תרגום YouTube'
+          : 'תרגום'
       return `${prefix}: ${getTranslationLabel(currentTranslateLang, translationOptionsRef.current)}`
     }
     return 'שפת מקור'
@@ -394,19 +410,23 @@ function PlyrEmbed({
             })
             button.setAttribute('aria-checked', 'true')
             playerTranslateLangRef.current = langOption.value
-            // Clear old-language cues immediately so the switch feels instant.
             cuesRef.current = []
             syncCaptionOverlay()
             if (captionsOnRef.current) {
-              const loaded = await loadCaptionsRef.current?.(langOption.value, { awaitPrefetch: true })
-              if (!loaded) return
+              if (isCloudHostedApp() || nativeCaptionsRef.current) {
+                const loaded = await switchNativeCaptions(langOption.value)
+                if (!loaded) return
+              } else {
+                const loaded = await loadCaptionsRef.current?.(langOption.value, { awaitPrefetch: true })
+                if (!loaded) return
+              }
             }
             updateSettingsValue(
               player,
               'captions',
               langOption.value === 'none'
                 ? 'שפת מקור'
-                : `${translatedLocallyRef.current ? 'תרגום מקומי' : 'תרגום'}: ${langOption.label}`,
+                : `${nativeCaptionsRef.current ? 'תרגום YouTube' : translatedLocallyRef.current ? 'תרגום מקומי' : 'תרגום'}: ${langOption.label}`,
             )
           },
         })
@@ -471,9 +491,34 @@ function PlyrEmbed({
 
     showSettingsSection(player, 'captions', true)
     updateSettingsValue(player, 'captions', captionsOnRef.current ? activeLabel : 'כבוי')
-  }, [getCaptionLabel, syncCaptionOverlay])
+  }, [getCaptionLabel, switchNativeCaptions, syncCaptionOverlay])
 
   const loadCaptionsRef = useRef(null)
+
+  const switchNativeCaptions = useCallback(
+    async (targetLang, { error = null } = {}) =>
+      applyNativeCaptionFallback({
+        player: playerRef.current,
+        targetLang,
+        sourceLang,
+        error,
+        playerRef,
+        nativeCaptionsRef,
+        captionsOnRef,
+        setCaptionsOn,
+        cuesRef,
+        syncCaptionOverlay,
+        refreshCaptionsSettingsMenu,
+        emitCaptionStatus,
+        translatedLocallyRef,
+      }),
+    [
+      emitCaptionStatus,
+      refreshCaptionsSettingsMenu,
+      sourceLang,
+      syncCaptionOverlay,
+    ],
+  )
 
   const loadCaptions = useCallback(async (
     selectedTargetLang = playerTranslateLangRef.current,
@@ -495,18 +540,7 @@ function PlyrEmbed({
     )
 
     if (isCloudHostedApp()) {
-      const nativeReady = await applyNativeCaptionFallback({
-        player,
-        targetLang: playerTargetLang,
-        playerRef,
-        nativeCaptionsRef,
-        captionsOnRef,
-        setCaptionsOn,
-        cuesRef,
-        syncCaptionOverlay,
-        refreshCaptionsSettingsMenu,
-        emitCaptionStatus,
-      })
+      const nativeReady = await switchNativeCaptions(playerTargetLang)
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
       if (nativeReady) return true
     }
@@ -554,19 +588,7 @@ function PlyrEmbed({
         }
       } catch (error) {
         if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
-        const nativeReady = await applyNativeCaptionFallback({
-          player,
-          targetLang: playerTargetLang,
-          error,
-          playerRef,
-          nativeCaptionsRef,
-          captionsOnRef,
-          setCaptionsOn,
-          cuesRef,
-          syncCaptionOverlay,
-          refreshCaptionsSettingsMenu,
-          emitCaptionStatus,
-        })
+        const nativeReady = await switchNativeCaptions(playerTargetLang, { error })
         if (nativeReady) return true
         emitCaptionStatus(buildErrorCaptionStatus(error.message))
         console.warn('כתוביות:', error.message)
@@ -601,19 +623,7 @@ function PlyrEmbed({
     } catch (error) {
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
 
-      const nativeReady = await applyNativeCaptionFallback({
-        player,
-        targetLang: playerTargetLang,
-        error,
-        playerRef,
-        nativeCaptionsRef,
-        captionsOnRef,
-        setCaptionsOn,
-        cuesRef,
-        syncCaptionOverlay,
-        refreshCaptionsSettingsMenu,
-        emitCaptionStatus,
-      })
+      const nativeReady = await switchNativeCaptions(playerTargetLang, { error })
       if (nativeReady) return true
 
       cuesRef.current = []
@@ -629,6 +639,7 @@ function PlyrEmbed({
     emitCaptionStatus,
     refreshCaptionsSettingsMenu,
     sourceLang,
+    switchNativeCaptions,
     syncCaptionOverlay,
   ])
 
@@ -688,19 +699,7 @@ function PlyrEmbed({
         })
         .catch(async (error) => {
           if (prefetchId !== prefetchRequestIdRef.current) return
-          const nativeReady = await applyNativeCaptionFallback({
-            player: playerRef.current,
-            targetLang: playerTranslateLangRef.current,
-            error,
-            playerRef,
-            nativeCaptionsRef,
-            captionsOnRef,
-            setCaptionsOn,
-            cuesRef,
-            syncCaptionOverlay,
-            refreshCaptionsSettingsMenu,
-            emitCaptionStatus,
-          })
+          const nativeReady = await switchNativeCaptions(playerTranslateLangRef.current, { error })
           if (!nativeReady) {
             emitCaptionStatus(buildErrorCaptionStatus(error.message))
             console.warn('הכנת כתוביות:', error.message)
