@@ -222,6 +222,20 @@ const applyCaptionSelectionAcrossModules = (embed, modules, track) => {
   return null
 }
 
+export async function disableYouTubeNativeCaptions(player) {
+  const embed = player?.embed
+  if (!embed?.setOption) return
+
+  for (const moduleName of ['captions', 'cc']) {
+    try {
+      embed.loadModule(moduleName)
+      embed.setOption(moduleName, 'track', {})
+    } catch {
+      // Optional module.
+    }
+  }
+}
+
 export async function enableNativeYouTubeCaptions(
   player,
   { targetLang = 'none', sourceLang = 'auto' } = {},

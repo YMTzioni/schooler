@@ -12,8 +12,9 @@ import {
   normalizeApiCaptionStatus,
 } from '../utils/subtitleStatus.js'
 import { fetchCaptions } from '../utils/clientCaptions.js'
+import { fetchCaptionsViaBrowser } from '../utils/browserCaptions.js'
 import { isCloudHostedApp, isYouTubeBlockedError } from '../utils/cloudHost.js'
-import { enableNativeYouTubeCaptions, youtubeLangsMatch } from '../utils/youtubeNativeCaptions.js'
+import { enableNativeYouTubeCaptions, disableYouTubeNativeCaptions, youtubeLangsMatch } from '../utils/youtubeNativeCaptions.js'
 import { YOUTUBE_PLYR_OPTIONS, attachYouTubeShields } from '../../lib/youtubeEmbed.js'
 
 const YT_QUALITY_LABELS = {
@@ -276,10 +277,20 @@ async function applyNativeCaptionFallback({
 }
 
 async function loadCaptionsFromApi({ videoId, sourceLang, targetLang }) {
-  return fetchCaptions(videoId, {
-    lang: sourceLang,
-    tlang: targetLang,
-  })
+  try {
+    return await fetchCaptions(videoId, {
+      lang: sourceLang,
+      tlang: targetLang,
+    })
+  } catch (error) {
+    if (error?.code === 'YOUTUBE_BLOCKED' || isYouTubeBlockedError(error)) {
+      return fetchCaptionsViaBrowser(videoId, {
+        lang: sourceLang,
+        tlang: targetLang,
+      })
+    }
+    throw error
+  }
 }
 
 function applyCaptionContent({ content, translatedLocally, playerDuration }) {
@@ -473,20 +484,15 @@ function PlyrEmbed({
             cuesRef.current = []
             syncCaptionOverlay()
             if (captionsOnRef.current) {
-              if (isCloudHostedApp() || nativeCaptionsRef.current) {
-                const loaded = await switchNativeCaptionsRef.current(langOption.value)
-                if (!loaded) return
-              } else {
-                const loaded = await loadCaptionsRef.current?.(langOption.value, { awaitPrefetch: true })
-                if (!loaded) return
-              }
+              const loaded = await loadCaptionsRef.current?.(langOption.value, { awaitPrefetch: true })
+              if (!loaded) return
             }
             updateSettingsValue(
               player,
               'captions',
               langOption.value === 'none'
                 ? 'שפת מקור'
-                : `${nativeCaptionsRef.current ? 'תרגום YouTube' : translatedLocallyRef.current ? 'תרגום מקומי' : 'תרגום'}: ${langOption.label}`,
+                : `${translatedLocallyRef.current ? 'תרגום' : 'תרגום'}: ${langOption.label}`,
             )
           },
         })
@@ -570,15 +576,9 @@ function PlyrEmbed({
 
     emitCaptionStatus(
       buildLoadingCaptionStatus(
-        isCloudHostedApp() ? 'מפעיל כתוביות מובנות של YouTube…' : 'טוען כתוביות מהשרת…',
+        needsTranslation ? 'טוען ומתרגם כתוביות…' : 'טוען כתוביות…',
       ),
     )
-
-    if (isCloudHostedApp()) {
-      const nativeReady = await switchNativeCaptions(playerTargetLang)
-      if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
-      if (nativeReady) return true
-    }
 
     const applyLoadedCaptions = (subtitle, { cached = false } = {}) => {
       const playerDuration = Number(playerRef.current?.duration) || 0
@@ -587,8 +587,10 @@ function PlyrEmbed({
         translatedLocally: subtitle.translatedLocally,
         playerDuration,
       })
+      nativeCaptionsRef.current = false
       translatedLocallyRef.current = applied.translatedLocally
       cuesRef.current = applied.cues
+      disableYouTubeNativeCaptions(playerRef.current)
       refreshCaptionsSettingsMenu()
       syncCaptionOverlay()
       emitCaptionStatus(
@@ -596,6 +598,7 @@ function PlyrEmbed({
           state: 'ready',
           message: `${applied.cues.length} שורות כתוביות נטענו`,
           cueCount: applied.cues.length,
+          delivery: subtitle.status?.delivery || 'api',
         },
       )
       return true
@@ -707,11 +710,7 @@ function PlyrEmbed({
     cuesRef.current = []
     translatedLocallyRef.current = false
     nativeCaptionsRef.current = false
-    emitCaptionStatus(
-      buildLoadingCaptionStatus(
-        isCloudHostedApp() ? 'מפעיל כתוביות מובנות של YouTube…' : 'מכין כתוביות מהשרת…',
-      ),
-    )
+    emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות…'))
 
     translationOptionsRef.current = PLAYER_TRANSLATION_LANGUAGES
     refreshCaptionsSettingsMenu()

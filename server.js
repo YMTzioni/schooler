@@ -891,6 +891,24 @@ app.post('/api/youtube/subtitles/prefetch', async (req, res) => {
   }
 })
 
+app.post('/api/youtube/caption-tracks', async (req, res) => {
+  try {
+    const { videoId } = req.body
+    if (!videoId) {
+      return res.status(400).json({ message: 'חסר videoId' })
+    }
+
+    const info = await getCaptionTrackInfo(videoId, { preferPubProxy: preferYouTubePubProxy })
+    return res.json({
+      tracks: info.tracks || [],
+      translationLanguages: info.translationLanguages || [],
+      clientUserAgent: info.clientUserAgent || null,
+    })
+  } catch (error) {
+    return handleSubtitleApiError(res, error)
+  }
+})
+
 app.post('/api/youtube/subtitles', async (req, res) => {
   try {
     const { videoId, index, title, lang = 'auto', tlang = 'none', fmt = 'vtt' } = req.body
