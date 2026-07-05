@@ -38,8 +38,19 @@ function toYouTubeCaptionLang(lang) {
   return lang
 }
 
+function resolvePreferredTranslateLang(targetLang, captionLang) {
+  if (targetLang && targetLang !== 'none') return targetLang
+  if (captionLang && captionLang !== 'auto') return captionLang
+  return 'none'
+}
+
 const buildPlyrOptions = (preferredCaptionLang = 'he') => {
   const onCloud = isCloudHostedApp()
+  const cloudCaptionPref =
+    preferredCaptionLang && preferredCaptionLang !== 'none'
+      ? toYouTubeCaptionLang(preferredCaptionLang)
+      : null
+
   return {
   youtube: {
     ...YOUTUBE_PLYR_OPTIONS,
@@ -47,7 +58,7 @@ const buildPlyrOptions = (preferredCaptionLang = 'he') => {
     ...(onCloud
       ? {
           cc_load_policy: 1,
-          cc_lang_pref: toYouTubeCaptionLang(preferredCaptionLang),
+          ...(cloudCaptionPref ? { cc_lang_pref: cloudCaptionPref } : {}),
         }
       : {}),
   },
@@ -208,9 +219,10 @@ async function applyNativeCaptionFallback({
   const wantsTranslation = targetLang && targetLang !== 'none'
   const gotTranslation = wantsTranslation && result.translated
   const sameLanguageOnly =
-    wantsTranslation &&
-    result.track &&
-    youtubeLangsMatch(result.track.languageCode, sourceLang)
+    result.sameLanguageOnly ||
+    (wantsTranslation &&
+      result.track &&
+      youtubeLangsMatch(result.track.languageCode, sourceLang))
 
   nativeCaptionsRef.current = true
   translatedLocallyRef.current = false
@@ -327,13 +339,9 @@ function PlyrEmbed({
   const captionsMenuModeRef = useRef('main')
   const translatedLocallyRef = useRef(false)
   const nativeCaptionsRef = useRef(false)
-  const playerTranslateLangRef = useRef(
-    targetLang && targetLang !== 'none'
-      ? targetLang
-      : captionLang && captionLang !== 'auto'
-        ? captionLang
-        : 'none',
-  )
+  const subtitlePropsRef = useRef({ targetLang, captionLang })
+  const captionApiSyncTimerRef = useRef(null)
+  const playerTranslateLangRef = useRef(resolvePreferredTranslateLang(targetLang, captionLang))
   const [captionsOn, setCaptionsOn] = useState(showCaptions)
 
   const emitCaptionStatus = useCallback(
@@ -652,13 +660,21 @@ function PlyrEmbed({
   useEffect(() => {
     if (!videoId) return
     videoIdRef.current = videoId
-    const preferredTranslateLang =
-      targetLang && targetLang !== 'none'
-        ? targetLang
-        : captionLang && captionLang !== 'auto'
-          ? captionLang
-          : 'none'
-    playerTranslateLangRef.current = preferredTranslateLang
+
+    const propsChanged =
+      subtitlePropsRef.current.targetLang !== targetLang ||
+      subtitlePropsRef.current.captionLang !== captionLang
+
+    if (propsChanged) {
+      playerTranslateLangRef.current = resolvePreferredTranslateLang(targetLang, captionLang)
+      subtitlePropsRef.current = { targetLang, captionLang }
+    } else if (
+      !playerTranslateLangRef.current ||
+      playerTranslateLangRef.current === 'none'
+    ) {
+      playerTranslateLangRef.current = resolvePreferredTranslateLang(targetLang, captionLang)
+    }
+
     captionRequestIdRef.current += 1
     captionsMenuModeRef.current = 'main'
     captionsOnRef.current = showCaptions
@@ -678,8 +694,8 @@ function PlyrEmbed({
     const prefetchId = prefetchRequestIdRef.current + 1
     prefetchRequestIdRef.current = prefetchId
     const priorityLang =
-      preferredTranslateLang && preferredTranslateLang !== 'none'
-        ? preferredTranslateLang
+      playerTranslateLangRef.current && playerTranslateLangRef.current !== 'none'
+        ? playerTranslateLangRef.current
         : captionLang && captionLang !== 'auto'
           ? captionLang
           : 'he'
@@ -796,6 +812,26 @@ function PlyrEmbed({
       window.setTimeout(() => setupYouTubeQualityMenu(player), 300)
     }
 
+    const scheduleNativeCaptionSync = () => {
+      if (captionApiSyncTimerRef.current) {
+        window.clearTimeout(captionApiSyncTimerRef.current)
+      }
+      captionApiSyncTimerRef.current = window.setTimeout(() => {
+        captionApiSyncTimerRef.current = null
+        if (!captionsOnRef.current) return
+        const lang = playerTranslateLangRef.current
+        if (!lang || lang === 'none') return
+        if (!(isCloudHostedApp() || nativeCaptionsRef.current)) return
+        switchNativeCaptionsRef.current(lang)
+      }, 200)
+    }
+
+    const onApiChange = () => scheduleNativeCaptionSync()
+
+    if (player.embed?.addEventListener) {
+      player.embed.addEventListener('onApiChange', onApiChange)
+    }
+
     const onTimeUpdate = () => syncCaptionOverlayRef.current()
     const onSeeked = () => syncCaptionOverlayRef.current()
 
@@ -808,6 +844,13 @@ function PlyrEmbed({
 
     return () => {
       stopCaptionSync()
+      if (captionApiSyncTimerRef.current) {
+        window.clearTimeout(captionApiSyncTimerRef.current)
+        captionApiSyncTimerRef.current = null
+      }
+      if (player.embed?.removeEventListener) {
+        player.embed.removeEventListener('onApiChange', onApiChange)
+      }
       player.off('ready', onReady)
       player.off('timeupdate', onTimeUpdate)
       player.off('playing', startCaptionSync)
@@ -827,6 +870,20 @@ function PlyrEmbed({
     refreshCaptionsSettingsMenu()
     syncCaptionOverlay()
   }, [captionsOn, refreshCaptionsSettingsMenu, syncCaptionOverlay])
+
+  useEffect(() => {
+    const propsChanged =
+      subtitlePropsRef.current.targetLang !== targetLang ||
+      subtitlePropsRef.current.captionLang !== captionLang
+    if (!propsChanged) return
+
+    subtitlePropsRef.current = { targetLang, captionLang }
+    playerTranslateLangRef.current = resolvePreferredTranslateLang(targetLang, captionLang)
+    refreshCaptionsSettingsMenu()
+
+    if (!showCaptions || !captionsOnRef.current) return
+    loadCaptionsRef.current?.(playerTranslateLangRef.current)
+  }, [targetLang, captionLang, showCaptions, refreshCaptionsSettingsMenu])
 
   if (!videoId) return null
 
