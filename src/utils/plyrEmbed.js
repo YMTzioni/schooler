@@ -25,8 +25,8 @@ export const buildPlyrEmbedCode = (videoId, title, origin = SCHOOLER_ORIGIN) => 
   return `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css" />
 <style>
   .plyr-yt-shell{position:relative;width:100%;padding-bottom:56.25%;height:0;overflow:hidden;background:#000;border-radius:8px}
-  .plyr-yt-shell__stage{position:absolute;inset:0;overflow:hidden}
-  .plyr-yt-shell .plyr__video-embed iframe{width:118%!important;height:118%!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important}
+  .plyr-yt-shell__stage{position:absolute;inset:0}
+  .plyr-yt-shell .plyr__video-embed,.plyr-yt-shell .plyr__video-embed iframe{width:100%!important;height:100%!important}
 </style>
 <div class="plyr-yt-shell" oncontextmenu="return false">
   <div class="plyr-yt-shell__stage">
