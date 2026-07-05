@@ -372,6 +372,33 @@ function PlyrEmbed({
     overlay.hidden = !cue?.text
   }, [])
 
+  const refreshCaptionsSettingsMenuRef = useRef(() => {})
+  const switchNativeCaptionsRef = useRef(async () => false)
+
+  const switchNativeCaptions = useCallback(
+    async (targetLang, { error = null } = {}) =>
+      applyNativeCaptionFallback({
+        player: playerRef.current,
+        targetLang,
+        sourceLang,
+        error,
+        playerRef,
+        nativeCaptionsRef,
+        captionsOnRef,
+        setCaptionsOn,
+        cuesRef,
+        syncCaptionOverlay,
+        refreshCaptionsSettingsMenu: () => refreshCaptionsSettingsMenuRef.current?.(),
+        emitCaptionStatus,
+        translatedLocallyRef,
+      }),
+    [emitCaptionStatus, sourceLang, syncCaptionOverlay],
+  )
+
+  useEffect(() => {
+    switchNativeCaptionsRef.current = switchNativeCaptions
+  }, [switchNativeCaptions])
+
   const refreshCaptionsSettingsMenu = useCallback(() => {
     const player = playerRef.current
     if (!player?.elements?.settings?.panels?.captions) return
@@ -414,7 +441,7 @@ function PlyrEmbed({
             syncCaptionOverlay()
             if (captionsOnRef.current) {
               if (isCloudHostedApp() || nativeCaptionsRef.current) {
-                const loaded = await switchNativeCaptions(langOption.value)
+                const loaded = await switchNativeCaptionsRef.current(langOption.value)
                 if (!loaded) return
               } else {
                 const loaded = await loadCaptionsRef.current?.(langOption.value, { awaitPrefetch: true })
@@ -491,34 +518,9 @@ function PlyrEmbed({
 
     showSettingsSection(player, 'captions', true)
     updateSettingsValue(player, 'captions', captionsOnRef.current ? activeLabel : 'כבוי')
-  }, [getCaptionLabel, switchNativeCaptions, syncCaptionOverlay])
+  }, [getCaptionLabel, syncCaptionOverlay])
 
   const loadCaptionsRef = useRef(null)
-
-  const switchNativeCaptions = useCallback(
-    async (targetLang, { error = null } = {}) =>
-      applyNativeCaptionFallback({
-        player: playerRef.current,
-        targetLang,
-        sourceLang,
-        error,
-        playerRef,
-        nativeCaptionsRef,
-        captionsOnRef,
-        setCaptionsOn,
-        cuesRef,
-        syncCaptionOverlay,
-        refreshCaptionsSettingsMenu,
-        emitCaptionStatus,
-        translatedLocallyRef,
-      }),
-    [
-      emitCaptionStatus,
-      refreshCaptionsSettingsMenu,
-      sourceLang,
-      syncCaptionOverlay,
-    ],
-  )
 
   const loadCaptions = useCallback(async (
     selectedTargetLang = playerTranslateLangRef.current,
@@ -733,7 +735,6 @@ function PlyrEmbed({
     syncCaptionOverlay,
   ])
 
-  const refreshCaptionsSettingsMenuRef = useRef(refreshCaptionsSettingsMenu)
   const syncCaptionOverlayRef = useRef(syncCaptionOverlay)
 
   useEffect(() => {
