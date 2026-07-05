@@ -6,12 +6,24 @@ import {
   setCachedCaption,
   setPrefetchPromise,
 } from './captionCache.js'
+import { isCloudHostedApp } from './cloudHost.js'
 
 export async function prefetchCaptionsForVideo({
   videoId,
   sourceLang = 'auto',
   priorityLang = 'he',
 }) {
+  if (isCloudHostedApp()) {
+    return {
+      videoId,
+      subtitles: {},
+      status: {
+        state: 'skipped',
+        message: 'בענן — משתמשים בכתוביות מובנות של YouTube',
+      },
+    }
+  }
+
   const existing = getPrefetchPromise(videoId)
   if (existing) return existing
 

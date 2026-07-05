@@ -652,7 +652,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'schooler-local-bridge',
-    version: '1.3.4',
+    version: '1.3.5',
     features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status', 'subtitle-translate'],
   })
 })

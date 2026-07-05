@@ -12,6 +12,7 @@ import {
   normalizeApiCaptionStatus,
 } from '../utils/subtitleStatus.js'
 import { fetchCaptions } from '../utils/clientCaptions.js'
+import { isCloudHostedApp, isYouTubeBlockedError } from '../utils/cloudHost.js'
 import { YOUTUBE_PLYR_OPTIONS, attachYouTubeShields } from '../../lib/youtubeEmbed.js'
 
 const YT_QUALITY_LABELS = {
@@ -30,10 +31,24 @@ const YT_QUALITY_LABELS = {
 // YouTube events can arrive slightly late; show cue a bit earlier for smoother sync.
 const CAPTION_LEAD_SECONDS = 0.18
 
-const buildPlyrOptions = () => ({
+function toYouTubeCaptionLang(lang) {
+  if (!lang || lang === 'none' || lang === 'auto') return 'iw'
+  if (lang === 'he') return 'iw'
+  return lang
+}
+
+const buildPlyrOptions = (preferredCaptionLang = 'he') => {
+  const onCloud = isCloudHostedApp()
+  return {
   youtube: {
     ...YOUTUBE_PLYR_OPTIONS,
     origin: window.location.origin,
+    ...(onCloud
+      ? {
+          cc_load_policy: 1,
+          cc_lang_pref: toYouTubeCaptionLang(preferredCaptionLang),
+        }
+      : {}),
   },
   controls: [
     'play-large',
@@ -62,7 +77,8 @@ const buildPlyrOptions = () => ({
   hideControls: false,
   resetOnEnd: true,
   clickToPlay: true,
-})
+  }
+}
 
 function updateSettingsValue(player, type, value) {
   const button = player.elements.settings?.buttons?.[type]
@@ -166,23 +182,61 @@ function normalizeCueTimesForPlayback(cues, playerDuration) {
   }))
 }
 
-function toYouTubeCaptionLang(lang) {
-  if (!lang || lang === 'none' || lang === 'auto') return 'iw'
-  if (lang === 'he') return 'iw'
-  return lang
+async function enableNativeYouTubeCaptions(player, lang, { maxAttempts = 16, delayMs = 300 } = {}) {
+  const languageCode = toYouTubeCaptionLang(lang)
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const embed = player?.embed
+    if (embed?.loadModule && embed?.setOption) {
+      try {
+        embed.loadModule('captions')
+        embed.setOption('captions', 'track', { languageCode })
+        return true
+      } catch {
+        // YouTube iframe may not be ready yet.
+      }
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs))
+  }
+
+  return false
 }
 
-function enableNativeYouTubeCaptions(player, lang) {
-  const embed = player?.embed
-  if (!embed?.loadModule || !embed?.setOption) return false
+async function applyNativeCaptionFallback({
+  player,
+  targetLang,
+  error = null,
+  playerRef,
+  nativeCaptionsRef,
+  captionsOnRef,
+  setCaptionsOn,
+  cuesRef,
+  syncCaptionOverlay,
+  refreshCaptionsSettingsMenu,
+  emitCaptionStatus,
+}) {
+  const resolvedPlayer = player || playerRef.current
+  const nativeEnabled = await enableNativeYouTubeCaptions(resolvedPlayer, targetLang)
+  if (!nativeEnabled) return false
 
-  try {
-    embed.loadModule('captions')
-    embed.setOption('captions', 'track', { languageCode: toYouTubeCaptionLang(lang) })
-    return true
-  } catch {
-    return false
+  nativeCaptionsRef.current = true
+  cuesRef.current = []
+  captionsOnRef.current = true
+  setCaptionsOn(true)
+  syncCaptionOverlay()
+  refreshCaptionsSettingsMenu()
+  if (resolvedPlayer) {
+    updateSettingsValue(resolvedPlayer, 'captions', 'YouTube מובנה')
   }
+  emitCaptionStatus({
+    state: 'ready',
+    message: isYouTubeBlockedError(error)
+      ? 'כתוביות מובנות של YouTube (השרת בענן חסום)'
+      : 'כתוביות מובנות של YouTube',
+    delivery: 'youtube-native',
+    cueCount: 0,
+  })
+  return true
 }
 
 async function loadCaptionsFromApi({ videoId, sourceLang, targetLang }) {
@@ -434,7 +488,28 @@ function PlyrEmbed({
       : 'none'
     const needsTranslation = playerTargetLang !== 'none'
 
-    emitCaptionStatus(buildLoadingCaptionStatus('טוען כתוביות מהשרת…'))
+    emitCaptionStatus(
+      buildLoadingCaptionStatus(
+        isCloudHostedApp() ? 'מפעיל כתוביות מובנות של YouTube…' : 'טוען כתוביות מהשרת…',
+      ),
+    )
+
+    if (isCloudHostedApp()) {
+      const nativeReady = await applyNativeCaptionFallback({
+        player,
+        targetLang: playerTargetLang,
+        playerRef,
+        nativeCaptionsRef,
+        captionsOnRef,
+        setCaptionsOn,
+        cuesRef,
+        syncCaptionOverlay,
+        refreshCaptionsSettingsMenu,
+        emitCaptionStatus,
+      })
+      if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
+      if (nativeReady) return true
+    }
 
     const applyLoadedCaptions = (subtitle, { cached = false } = {}) => {
       const playerDuration = Number(playerRef.current?.duration) || 0
@@ -463,7 +538,7 @@ function PlyrEmbed({
       return applyLoadedCaptions(cached, { cached: true })
     }
 
-    const inflightPrefetch = getPrefetchPromise(currentVideoId)
+    const inflightPrefetch = isCloudHostedApp() ? null : getPrefetchPromise(currentVideoId)
     if (inflightPrefetch && awaitPrefetch) {
       if (player) {
         updateSettingsValue(player, 'captions', 'מכין כתוביות…')
@@ -479,6 +554,20 @@ function PlyrEmbed({
         }
       } catch (error) {
         if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
+        const nativeReady = await applyNativeCaptionFallback({
+          player,
+          targetLang: playerTargetLang,
+          error,
+          playerRef,
+          nativeCaptionsRef,
+          captionsOnRef,
+          setCaptionsOn,
+          cuesRef,
+          syncCaptionOverlay,
+          refreshCaptionsSettingsMenu,
+          emitCaptionStatus,
+        })
+        if (nativeReady) return true
         emitCaptionStatus(buildErrorCaptionStatus(error.message))
         console.warn('כתוביות:', error.message)
         return false
@@ -512,28 +601,20 @@ function PlyrEmbed({
     } catch (error) {
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
 
-      const nativeEnabled = enableNativeYouTubeCaptions(playerRef.current, playerTargetLang)
-      if (nativeEnabled) {
-        nativeCaptionsRef.current = true
-        cuesRef.current = []
-        captionsOnRef.current = false
-        setCaptionsOn(false)
-        syncCaptionOverlay()
-        refreshCaptionsSettingsMenu()
-        if (player) {
-          updateSettingsValue(player, 'captions', 'YouTube מובנה')
-        }
-        emitCaptionStatus({
-          state: 'ready',
-          message:
-            error?.code === 'YOUTUBE_BLOCKED'
-              ? 'השרת בענן חסום — מוצגות כתוביות מובנות של YouTube'
-              : 'כתוביות מובנות של YouTube (השרת לא זמין)',
-          delivery: 'youtube-native',
-          cueCount: 0,
-        })
-        return true
-      }
+      const nativeReady = await applyNativeCaptionFallback({
+        player,
+        targetLang: playerTargetLang,
+        error,
+        playerRef,
+        nativeCaptionsRef,
+        captionsOnRef,
+        setCaptionsOn,
+        cuesRef,
+        syncCaptionOverlay,
+        refreshCaptionsSettingsMenu,
+        emitCaptionStatus,
+      })
+      if (nativeReady) return true
 
       cuesRef.current = []
       captionsOnRef.current = false
@@ -572,7 +653,11 @@ function PlyrEmbed({
     cuesRef.current = []
     translatedLocallyRef.current = false
     nativeCaptionsRef.current = false
-    emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהשרת…'))
+    emitCaptionStatus(
+      buildLoadingCaptionStatus(
+        isCloudHostedApp() ? 'מפעיל כתוביות מובנות של YouTube…' : 'מכין כתוביות מהשרת…',
+      ),
+    )
 
     translationOptionsRef.current = PLAYER_TRANSLATION_LANGUAGES
     refreshCaptionsSettingsMenu()
@@ -586,25 +671,42 @@ function PlyrEmbed({
           ? captionLang
           : 'he'
 
-    const prefetchPromise = prefetchCaptionsForVideo({
-      videoId,
-      sourceLang,
-      priorityLang,
-    })
+    if (!isCloudHostedApp()) {
+      const prefetchPromise = prefetchCaptionsForVideo({
+        videoId,
+        sourceLang,
+        priorityLang,
+      })
 
-    prefetchPromise
-      .then((prefetchResult) => {
-        if (prefetchId !== prefetchRequestIdRef.current || videoIdRef.current !== videoId) return
-        emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
-        if (!showCaptions || !captionsOnRef.current) return
-        if (cuesRef.current.length) return
-        loadCaptionsRef.current?.(playerTranslateLangRef.current)
-      })
-      .catch((error) => {
-        if (prefetchId !== prefetchRequestIdRef.current) return
-        emitCaptionStatus(buildErrorCaptionStatus(error.message))
-        console.warn('הכנת כתוביות:', error.message)
-      })
+      prefetchPromise
+        .then((prefetchResult) => {
+          if (prefetchId !== prefetchRequestIdRef.current || videoIdRef.current !== videoId) return
+          emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
+          if (!showCaptions || !captionsOnRef.current) return
+          if (cuesRef.current.length) return
+          loadCaptionsRef.current?.(playerTranslateLangRef.current)
+        })
+        .catch(async (error) => {
+          if (prefetchId !== prefetchRequestIdRef.current) return
+          const nativeReady = await applyNativeCaptionFallback({
+            player: playerRef.current,
+            targetLang: playerTranslateLangRef.current,
+            error,
+            playerRef,
+            nativeCaptionsRef,
+            captionsOnRef,
+            setCaptionsOn,
+            cuesRef,
+            syncCaptionOverlay,
+            refreshCaptionsSettingsMenu,
+            emitCaptionStatus,
+          })
+          if (!nativeReady) {
+            emitCaptionStatus(buildErrorCaptionStatus(error.message))
+            console.warn('הכנת כתוביות:', error.message)
+          }
+        })
+    }
 
     if (showCaptions) {
       const runLoadCaptions = loadCaptionsRef.current
@@ -646,7 +748,7 @@ function PlyrEmbed({
     const element = document.getElementById(playerId)
     if (!element) return
 
-    const player = new Plyr(`#${playerId}`, buildPlyrOptions())
+    const player = new Plyr(`#${playerId}`, buildPlyrOptions(playerTranslateLangRef.current))
     playerRef.current = player
 
     const ensureOverlay = () => {
