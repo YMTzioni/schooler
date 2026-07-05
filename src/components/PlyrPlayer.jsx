@@ -32,35 +32,17 @@ const YT_QUALITY_LABELS = {
 // YouTube events can arrive slightly late; show cue a bit earlier for smoother sync.
 const CAPTION_LEAD_SECONDS = 0.18
 
-function toYouTubeCaptionLang(lang) {
-  if (!lang || lang === 'none' || lang === 'auto') return 'iw'
-  if (lang === 'he') return 'iw'
-  return lang
-}
-
 function resolvePreferredTranslateLang(targetLang, captionLang) {
   if (targetLang && targetLang !== 'none') return targetLang
   if (captionLang && captionLang !== 'auto') return captionLang
   return 'none'
 }
 
-const buildPlyrOptions = (preferredCaptionLang = 'he') => {
-  const onCloud = isCloudHostedApp()
-  const cloudCaptionPref =
-    preferredCaptionLang && preferredCaptionLang !== 'none'
-      ? toYouTubeCaptionLang(preferredCaptionLang)
-      : null
-
-  return {
+const buildPlyrOptions = () => ({
+  captions: { active: true, update: false },
   youtube: {
     ...YOUTUBE_PLYR_OPTIONS,
     origin: window.location.origin,
-    ...(onCloud
-      ? {
-          cc_load_policy: 1,
-          ...(cloudCaptionPref ? { cc_lang_pref: cloudCaptionPref } : {}),
-        }
-      : {}),
   },
   controls: [
     'play-large',
@@ -89,8 +71,7 @@ const buildPlyrOptions = (preferredCaptionLang = 'he') => {
   hideControls: false,
   resetOnEnd: true,
   clickToPlay: true,
-  }
-}
+})
 
 function updateSettingsValue(player, type, value) {
   const button = player.elements.settings?.buttons?.[type]
@@ -208,15 +189,46 @@ async function applyNativeCaptionFallback({
   refreshCaptionsSettingsMenu,
   emitCaptionStatus,
   translatedLocallyRef,
+  pendingNativeCaptionLangRef,
 }) {
   const resolvedPlayer = player || playerRef.current
   const result = await enableNativeYouTubeCaptions(resolvedPlayer, {
     targetLang,
     sourceLang,
   })
-  if (!result.ok) return false
 
   const wantsTranslation = targetLang && targetLang !== 'none'
+  const targetLabel = getTranslationLabel(targetLang, PLAYER_TRANSLATION_LANGUAGES)
+
+  if (result.needsPlayback) {
+    pendingNativeCaptionLangRef.current = targetLang
+    nativeCaptionsRef.current = true
+    translatedLocallyRef.current = false
+    cuesRef.current = []
+    captionsOnRef.current = true
+    setCaptionsOn(true)
+    refreshCaptionsSettingsMenu()
+    if (resolvedPlayer) {
+      updateSettingsValue(
+        resolvedPlayer,
+        'captions',
+        wantsTranslation ? `תרגום YouTube: ${targetLabel}` : 'שפת מקור',
+      )
+    }
+    emitCaptionStatus({
+      state: 'partial',
+      message: wantsTranslation
+        ? `לחצו Play — תרגום YouTube ל${targetLabel} ייטען עם תחילת הנגינה`
+        : 'לחצו Play כדי לטעון כתוביות מובנות של YouTube',
+      delivery: 'youtube-native',
+      cueCount: 0,
+      targetLang: wantsTranslation ? targetLang : null,
+      translatedLocally: false,
+    })
+    return 'pending-playback'
+  }
+
+  if (!result.ok) return false
   const gotTranslation = wantsTranslation && result.translated
   const sameLanguageOnly =
     result.sameLanguageOnly ||
@@ -224,6 +236,7 @@ async function applyNativeCaptionFallback({
       result.track &&
       youtubeLangsMatch(result.track.languageCode, sourceLang))
 
+  pendingNativeCaptionLangRef.current = null
   nativeCaptionsRef.current = true
   translatedLocallyRef.current = false
   cuesRef.current = []
@@ -232,7 +245,6 @@ async function applyNativeCaptionFallback({
   syncCaptionOverlay()
   refreshCaptionsSettingsMenu()
 
-  const targetLabel = getTranslationLabel(targetLang, PLAYER_TRANSLATION_LANGUAGES)
   let message = 'כתוביות מובנות של YouTube'
   if (gotTranslation) {
     message = `תרגום YouTube ל${targetLabel}`
@@ -341,6 +353,8 @@ function PlyrEmbed({
   const nativeCaptionsRef = useRef(false)
   const subtitlePropsRef = useRef({ targetLang, captionLang })
   const captionApiSyncTimerRef = useRef(null)
+  const pendingNativeCaptionLangRef = useRef(null)
+  const applyPendingNativeCaptionsRef = useRef(async () => {})
   const playerTranslateLangRef = useRef(resolvePreferredTranslateLang(targetLang, captionLang))
   const [captionsOn, setCaptionsOn] = useState(showCaptions)
 
@@ -399,13 +413,24 @@ function PlyrEmbed({
         refreshCaptionsSettingsMenu: () => refreshCaptionsSettingsMenuRef.current?.(),
         emitCaptionStatus,
         translatedLocallyRef,
+        pendingNativeCaptionLangRef,
       }),
     [emitCaptionStatus, sourceLang, syncCaptionOverlay],
   )
 
+  const applyPendingNativeCaptions = useCallback(async () => {
+    const lang =
+      pendingNativeCaptionLangRef.current ||
+      (captionsOnRef.current ? playerTranslateLangRef.current : null)
+    if (!lang || lang === 'none') return
+    if (!(isCloudHostedApp() || nativeCaptionsRef.current || captionsOnRef.current)) return
+    await switchNativeCaptionsRef.current(lang)
+  }, [])
+
   useEffect(() => {
     switchNativeCaptionsRef.current = switchNativeCaptions
-  }, [switchNativeCaptions])
+    applyPendingNativeCaptionsRef.current = applyPendingNativeCaptions
+  }, [switchNativeCaptions, applyPendingNativeCaptions])
 
   const refreshCaptionsSettingsMenu = useCallback(() => {
     const player = playerRef.current
@@ -764,7 +789,7 @@ function PlyrEmbed({
     const element = document.getElementById(playerId)
     if (!element) return
 
-    const player = new Plyr(`#${playerId}`, buildPlyrOptions(playerTranslateLangRef.current))
+    const player = new Plyr(`#${playerId}`, buildPlyrOptions())
     playerRef.current = player
 
     const ensureOverlay = () => {
@@ -819,7 +844,8 @@ function PlyrEmbed({
       captionApiSyncTimerRef.current = window.setTimeout(() => {
         captionApiSyncTimerRef.current = null
         if (!captionsOnRef.current) return
-        const lang = playerTranslateLangRef.current
+        const lang =
+          pendingNativeCaptionLangRef.current || playerTranslateLangRef.current
         if (!lang || lang === 'none') return
         if (!(isCloudHostedApp() || nativeCaptionsRef.current)) return
         switchNativeCaptionsRef.current(lang)
@@ -832,12 +858,18 @@ function PlyrEmbed({
       player.embed.addEventListener('onApiChange', onApiChange)
     }
 
+    const onPlaying = () => {
+      startCaptionSync()
+      applyPendingNativeCaptionsRef.current?.()
+      scheduleNativeCaptionSync()
+    }
+
     const onTimeUpdate = () => syncCaptionOverlayRef.current()
     const onSeeked = () => syncCaptionOverlayRef.current()
 
     player.on('ready', onReady)
     player.on('timeupdate', onTimeUpdate)
-    player.on('playing', startCaptionSync)
+    player.on('playing', onPlaying)
     player.on('pause', stopCaptionSync)
     player.on('ended', stopCaptionSync)
     player.on('seeked', onSeeked)
@@ -853,7 +885,7 @@ function PlyrEmbed({
       }
       player.off('ready', onReady)
       player.off('timeupdate', onTimeUpdate)
-      player.off('playing', startCaptionSync)
+      player.off('playing', onPlaying)
       player.off('pause', stopCaptionSync)
       player.off('ended', stopCaptionSync)
       player.off('seeked', onSeeked)
