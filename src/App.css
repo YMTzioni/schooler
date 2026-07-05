@@ -146,6 +146,90 @@ pre {
   background-size: cover;
 }
 
+.plyr-player-wrap .plyr__controls {
+  z-index: 10;
+}
+
+.plyr-player-wrap .plyr__menu__container {
+  z-index: 25;
+}
+
+/* Slight zoom crops YouTube corner logos inside the iframe */
+.plyr-player-wrap .plyr--yt-branded .plyr__video-wrapper,
+.plyr-player-wrap .plyr--yt-branded .plyr__video-embed {
+  overflow: hidden;
+}
+
+.plyr-player-wrap .plyr--yt-branded .plyr__video-embed iframe {
+  width: 118% !important;
+  height: 118% !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+}
+
+.plyr-yt-shields {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.plyr-yt-shield {
+  position: absolute;
+  pointer-events: auto;
+  background: transparent;
+}
+
+.plyr-yt-shield--top {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 72px;
+}
+
+.plyr-yt-shield--top-right {
+  top: 0;
+  right: 0;
+  width: 96px;
+  height: 56px;
+}
+
+.plyr-yt-shield--br-watch {
+  bottom: 58px;
+  right: 0;
+  width: 130px;
+  height: 36px;
+}
+
+.plyr-yt-shield--br-logo {
+  bottom: 0;
+  right: 0;
+  width: 88px;
+  height: 48px;
+}
+
+/* In fullscreen, leave the Plyr control bar clickable */
+.plyr--fullscreen .plyr-yt-shields,
+.plyr:fullscreen .plyr-yt-shields {
+  bottom: 52px;
+  z-index: 2;
+}
+
+.plyr--fullscreen .plyr-yt-shield--br-logo,
+.plyr:fullscreen .plyr-yt-shield--br-logo {
+  bottom: 0;
+  width: 72px;
+  height: 36px;
+}
+
+.plyr--fullscreen .plyr-yt-shield--br-watch,
+.plyr:fullscreen .plyr-yt-shield--br-watch {
+  bottom: 40px;
+  width: 110px;
+  height: 28px;
+}
+
 .plyr-caption-overlay {
   position: absolute;
   left: 50%;
@@ -163,17 +247,6 @@ pre {
   z-index: 30;
   white-space: pre-wrap;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-}
-
-.plyr-top-left-shield {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 84px;
-  z-index: 60;
-  background: transparent;
-  pointer-events: auto;
 }
 
 .plyr--fullscreen .plyr-caption-overlay,

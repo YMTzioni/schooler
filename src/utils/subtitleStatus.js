@@ -55,7 +55,13 @@ export const buildPrefetchCaptionStatus = (status) => {
 }
 
 export const buildErrorCaptionStatus = (message) => ({
-  state: message?.includes('חוסם') || message?.includes('PubProxy') ? 'blocked' : 'error',
+  state:
+    message?.includes('חוסם') ||
+    message?.includes('PubProxy') ||
+    message?.includes('YOUTUBE_BLOCKED') ||
+    (message?.includes('YouTube') && message?.includes('חסום'))
+      ? 'blocked'
+      : 'error',
   message: message || 'שגיאה בטעינת כתוביות',
   cueCount: 0,
 })

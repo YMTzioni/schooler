@@ -23,6 +23,10 @@ import {
   runWithYouTubeProxySession,
 } from './lib/youtubeCaptions.js'
 import { buildPrefetchStatus, buildSubtitleStatus } from './lib/subtitleStatus.js'
+import {
+  buildProtectedEmbedWrapper,
+  buildYouTubeEmbedUrl,
+} from './lib/youtubeEmbed.js'
 
 const app = express()
 const PORT = process.env.PORT || 3030
@@ -42,7 +46,9 @@ const isAllowedOrigin = (origin) => {
       protocol === 'https:' &&
       (hostname === 'localhost' ||
         hostname.endsWith('.github.io') ||
-        hostname.endsWith('.onrender.com'))
+        hostname.endsWith('.onrender.com') ||
+        hostname.endsWith('.schooler.biz') ||
+        hostname === 'schooler.biz')
     )
   } catch {
     return false
@@ -612,23 +618,7 @@ const escapeHtml = (value) =>
 
 const SCHOOLER_ORIGIN = 'https://my.schooler.biz'
 
-const buildEmbedUrl = (videoId) => {
-  const params = new URLSearchParams({
-    rel: '0',
-    modestbranding: '1',
-    iv_load_policy: '3',
-    disablekb: '1',
-    fs: '0',
-    controls: '1',
-    playsinline: '1',
-    autoplay: '0',
-    cc_load_policy: '0',
-    origin: SCHOOLER_ORIGIN,
-    widget_referrer: SCHOOLER_ORIGIN,
-  })
-
-  return `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`
-}
+const buildEmbedUrl = (videoId) => buildYouTubeEmbedUrl(videoId, SCHOOLER_ORIGIN)
 
 const buildEmbedPayload = (video, index) => {
   const episodeIndex = index + 1
@@ -638,12 +628,9 @@ const buildEmbedPayload = (video, index) => {
   const iframeAttrs = `src="${embedUrl}" title="${safeTitle}" width="100%" height="405" frameborder="0" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation" allow="encrypted-media; picture-in-picture"`
 
   const embedCode = `<iframe ${iframeAttrs}></iframe>`
-  const protectedEmbedCode = `<div style="position:relative;width:100%;padding-bottom:56.25%;height:0;overflow:hidden;background:#000;border-radius:8px;" oncontextmenu="return false;">
-  <iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" ${iframeAttrs}></iframe>
-  <div aria-hidden="true" style="position:absolute;top:0;left:0;width:100%;height:48px;z-index:2;"></div>
-  <div aria-hidden="true" style="position:absolute;bottom:0;right:0;width:110px;height:56px;z-index:2;"></div>
-  <div aria-hidden="true" style="position:absolute;bottom:52px;right:0;width:130px;height:40px;z-index:2;"></div>
-</div>`
+  const protectedEmbedCode = buildProtectedEmbedWrapper(
+    `<iframe style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" ${iframeAttrs}></iframe>`,
+  )
 
   return {
     index: episodeIndex,
@@ -662,7 +649,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'schooler-local-bridge',
-    version: '1.3.2',
+    version: '1.3.4',
     features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status', 'subtitle-translate'],
   })
 })

@@ -11,7 +11,8 @@ import {
   buildPrefetchCaptionStatus,
   normalizeApiCaptionStatus,
 } from '../utils/subtitleStatus.js'
-import { fetchCaptionsInBrowser } from '../utils/clientCaptions.js'
+import { fetchCaptions } from '../utils/clientCaptions.js'
+import { YOUTUBE_PLYR_OPTIONS, attachYouTubeShields } from '../../lib/youtubeEmbed.js'
 
 const YT_QUALITY_LABELS = {
   auto: 'אוטומטי',
@@ -31,14 +32,7 @@ const CAPTION_LEAD_SECONDS = 0.18
 
 const buildPlyrOptions = () => ({
   youtube: {
-    noCookie: true,
-    customControls: true,
-    rel: 0,
-    modestbranding: 1,
-    iv_load_policy: 3,
-    playsinline: 1,
-    cc_load_policy: 0,
-    enablejsapi: 1,
+    ...YOUTUBE_PLYR_OPTIONS,
     origin: window.location.origin,
   },
   controls: [
@@ -172,8 +166,27 @@ function normalizeCueTimesForPlayback(cues, playerDuration) {
   }))
 }
 
-async function loadCaptionsFromBrowser({ videoId, sourceLang, targetLang }) {
-  return fetchCaptionsInBrowser(videoId, {
+function toYouTubeCaptionLang(lang) {
+  if (!lang || lang === 'none' || lang === 'auto') return 'iw'
+  if (lang === 'he') return 'iw'
+  return lang
+}
+
+function enableNativeYouTubeCaptions(player, lang) {
+  const embed = player?.embed
+  if (!embed?.loadModule || !embed?.setOption) return false
+
+  try {
+    embed.loadModule('captions')
+    embed.setOption('captions', 'track', { languageCode: toYouTubeCaptionLang(lang) })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function loadCaptionsFromApi({ videoId, sourceLang, targetLang }) {
+  return fetchCaptions(videoId, {
     lang: sourceLang,
     tlang: targetLang,
   })
@@ -198,7 +211,8 @@ function CaptionStatusBar({ status }) {
         <strong className="caption-status-bar__title">
           {status.state === 'loading' && 'טוען כתוביות'}
           {status.state === 'prefetching' && 'מכין כתוביות'}
-          {status.state === 'ready' && status.delivery !== 'browser' && 'כתוביות פעילות'}
+          {status.state === 'ready' && status.delivery === 'youtube-native' && 'כתוביות YouTube'}
+          {status.state === 'ready' && status.delivery !== 'browser' && status.delivery !== 'youtube-native' && 'כתוביות פעילות'}
           {status.state === 'cached' && 'כתוביות מהזיכרון'}
           {(status.state === 'ready' || status.state === 'cached') && status.delivery === 'browser' && 'כתוביות מהדפדפן'}
           {status.state === 'partial' && 'כתוביות חלקיות'}
@@ -237,7 +251,6 @@ function PlyrEmbed({
   const playerId = `plyr-player-${videoId}-${reactId}`
   const playerRef = useRef(null)
   const overlayRef = useRef(null)
-  const topLeftShieldRef = useRef(null)
   const cuesRef = useRef([])
   const captionsOnRef = useRef(showCaptions)
   const videoIdRef = useRef(videoId)
@@ -247,6 +260,7 @@ function PlyrEmbed({
   const translationOptionsRef = useRef(PLAYER_TRANSLATION_LANGUAGES)
   const captionsMenuModeRef = useRef('main')
   const translatedLocallyRef = useRef(false)
+  const nativeCaptionsRef = useRef(false)
   const playerTranslateLangRef = useRef(
     targetLang && targetLang !== 'none'
       ? targetLang
@@ -420,7 +434,7 @@ function PlyrEmbed({
       : 'none'
     const needsTranslation = playerTargetLang !== 'none'
 
-    emitCaptionStatus(buildLoadingCaptionStatus('בודק כתוביות מהדפדפן…'))
+    emitCaptionStatus(buildLoadingCaptionStatus('טוען כתוביות מהשרת…'))
 
     const applyLoadedCaptions = (subtitle, { cached = false } = {}) => {
       const playerDuration = Number(playerRef.current?.duration) || 0
@@ -454,7 +468,7 @@ function PlyrEmbed({
       if (player) {
         updateSettingsValue(player, 'captions', 'מכין כתוביות…')
       }
-      emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהדפדפן…'))
+      emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהשרת…'))
       try {
         const prefetchResult = await inflightPrefetch
         emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
@@ -475,11 +489,11 @@ function PlyrEmbed({
       updateSettingsValue(player, 'captions', 'מתרגם כתוביות…')
     }
     emitCaptionStatus(
-      buildLoadingCaptionStatus(needsTranslation ? 'מתרגם כתוביות…' : 'מוריד כתוביות מהדפדפן…'),
+      buildLoadingCaptionStatus(needsTranslation ? 'מתרגם כתוביות…' : 'מוריד כתוביות מהשרת…'),
     )
 
     try {
-      const subtitle = await loadCaptionsFromBrowser({
+      const subtitle = await loadCaptionsFromApi({
         videoId: currentVideoId,
         sourceLang,
         targetLang: playerTargetLang,
@@ -487,6 +501,7 @@ function PlyrEmbed({
 
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
 
+      nativeCaptionsRef.current = false
       setCachedCaption(currentVideoId, playerTargetLang, {
         content: subtitle.content,
         translatedLocally: subtitle.translatedLocally,
@@ -497,13 +512,36 @@ function PlyrEmbed({
     } catch (error) {
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
 
+      const nativeEnabled = enableNativeYouTubeCaptions(playerRef.current, playerTargetLang)
+      if (nativeEnabled) {
+        nativeCaptionsRef.current = true
+        cuesRef.current = []
+        captionsOnRef.current = false
+        setCaptionsOn(false)
+        syncCaptionOverlay()
+        refreshCaptionsSettingsMenu()
+        if (player) {
+          updateSettingsValue(player, 'captions', 'YouTube מובנה')
+        }
+        emitCaptionStatus({
+          state: 'ready',
+          message:
+            error?.code === 'YOUTUBE_BLOCKED'
+              ? 'השרת בענן חסום — מוצגות כתוביות מובנות של YouTube'
+              : 'כתוביות מובנות של YouTube (השרת לא זמין)',
+          delivery: 'youtube-native',
+          cueCount: 0,
+        })
+        return true
+      }
+
       cuesRef.current = []
       captionsOnRef.current = false
       setCaptionsOn(false)
       syncCaptionOverlay()
       refreshCaptionsSettingsMenu()
       emitCaptionStatus(buildErrorCaptionStatus(error.message))
-      console.warn('כתוביות מהדפדפן:', error.message)
+      console.warn('כתוביות:', error.message)
       return false
     }
   }, [
@@ -533,7 +571,8 @@ function PlyrEmbed({
     setCaptionsOn(showCaptions)
     cuesRef.current = []
     translatedLocallyRef.current = false
-    emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהדפדפן…'))
+    nativeCaptionsRef.current = false
+    emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהשרת…'))
 
     translationOptionsRef.current = PLAYER_TRANSLATION_LANGUAGES
     refreshCaptionsSettingsMenu()
@@ -564,7 +603,7 @@ function PlyrEmbed({
       .catch((error) => {
         if (prefetchId !== prefetchRequestIdRef.current) return
         emitCaptionStatus(buildErrorCaptionStatus(error.message))
-        console.warn('הכנת כתוביות מהדפדפן:', error.message)
+        console.warn('הכנת כתוביות:', error.message)
       })
 
     if (showCaptions) {
@@ -618,24 +657,21 @@ function PlyrEmbed({
         overlayRef.current = overlay
       }
 
-      if (!topLeftShieldRef.current) {
-        const shield = document.createElement('div')
-        shield.className = 'plyr-top-left-shield'
-        shield.setAttribute('aria-hidden', 'true')
-        shield.title = ''
-        shield.addEventListener('click', (event) => {
-          event.preventDefault()
-          event.stopPropagation()
-        })
-        topLeftShieldRef.current = shield
-      }
-
       const container = player.elements.container
+      const videoSurface =
+        player.elements.wrapper ||
+        container?.querySelector('.plyr__video-wrapper') ||
+        container?.querySelector('.plyr__video-embed')
+
+      if (container) {
+        container.classList.add('plyr--yt-branded')
+        container.addEventListener('contextmenu', (event) => event.preventDefault())
+      }
       if (container && overlayRef.current.parentElement !== container) {
         container.appendChild(overlayRef.current)
       }
-      if (container && topLeftShieldRef.current.parentElement !== container) {
-        container.appendChild(topLeftShieldRef.current)
+      if (videoSurface) {
+        attachYouTubeShields(videoSurface)
       }
     }
 
@@ -679,10 +715,6 @@ function PlyrEmbed({
       if (overlayRef.current) {
         overlayRef.current.remove()
         overlayRef.current = null
-      }
-      if (topLeftShieldRef.current) {
-        topLeftShieldRef.current.remove()
-        topLeftShieldRef.current = null
       }
       player.destroy()
       playerRef.current = null
