@@ -35,7 +35,9 @@ const BASE_URL = 'https://api.schooler.biz'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distPath = path.join(__dirname, 'dist')
 const isProduction = process.env.NODE_ENV === 'production'
-const preferYouTubePubProxy = Boolean(process.env.RENDER) && process.env.USE_PUBPROXY !== 'false'
+const isVercel = Boolean(process.env.VERCEL)
+const isCloudHost = Boolean(process.env.RENDER || isVercel)
+const preferYouTubePubProxy = isCloudHost && process.env.USE_PUBPROXY !== 'false'
 
 const isAllowedOrigin = (origin) => {
   if (!origin) return true
@@ -47,6 +49,7 @@ const isAllowedOrigin = (origin) => {
       (hostname === 'localhost' ||
         hostname.endsWith('.github.io') ||
         hostname.endsWith('.onrender.com') ||
+        hostname.endsWith('.vercel.app') ||
         hostname.endsWith('.schooler.biz') ||
         hostname === 'schooler.biz')
     )
@@ -77,7 +80,7 @@ const VIDEO_TRANSLATION_CACHE_LIMIT = 40
 const authCookieOptions = {
   httpOnly: true,
   sameSite: 'lax',
-  secure: false,
+  secure: isProduction || isVercel,
   maxAge: 1000 * 60 * 60 * 24 * 14,
 }
 
@@ -955,14 +958,18 @@ app.use('/api', (req, res) => {
   })
 })
 
-if (isProduction) {
+if (isProduction && !isVercel) {
   app.use(express.static(distPath))
   app.get(/^(?!\/api).*/, (_req, res) => {
     res.sendFile(path.join(distPath, 'index.html'))
   })
 }
 
-app.listen(PORT, () => {
-  const mode = isProduction ? 'production' : 'development'
-  console.log(`Schooler listening on port ${PORT} (${mode})`)
-})
+if (!isVercel) {
+  app.listen(PORT, () => {
+    const mode = isProduction ? 'production' : 'development'
+    console.log(`Schooler listening on port ${PORT} (${mode})`)
+  })
+}
+
+export default app
