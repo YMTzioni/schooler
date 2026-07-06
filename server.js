@@ -28,6 +28,7 @@ import {
   buildProtectedEmbedWrapper,
   buildYouTubeEmbedUrl,
 } from './lib/youtubeEmbed.js'
+import { pickBestSourceTrack } from './lib/captionTrackUtils.js'
 import {
   buildSchoolerPasswordOAuthBody,
   buildSchoolerRefreshOAuthBody,
@@ -130,6 +131,7 @@ const createSession = (data) => {
 }
 
 const saveSchoolerOAuthSnapshot = async (raw) => {
+  if (isVercel) return
   const snapshotPath = path.join(__dirname, '.schooler-oauth.json')
   await writeFile(snapshotPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8')
 }
@@ -456,7 +458,6 @@ const transcriptToVtt = (segments) => {
   return vtt.trim()
 }
 
-import { pickBestSourceTrack } from './lib/captionTrackUtils.js'
 const vttToSrt = (vtt) => {
   const blocks = vtt.replace(/\r/g, '').split(/\n\n+/)
   let srt = ''
@@ -970,6 +971,7 @@ const createResponderSession = (data) => {
 }
 
 const saveResponderOAuthSnapshot = async (raw) => {
+  if (isVercel) return
   const snapshotPath = path.join(__dirname, '.responder-oauth.json')
   await writeFile(snapshotPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8')
 }

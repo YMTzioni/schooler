@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
-import SchoolerPanel from './components/SchoolerPanel.jsx'
+import ApiDashboard from './components/ApiDashboard.jsx'
 import { buildPlyrEmbedCode } from './utils/plyrEmbed.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
@@ -8,6 +8,7 @@ import {
   SUBTITLE_TARGET_LANGUAGES,
 } from './constants/subtitleLanguages.js'
 import { API_BASE, isGitHubPagesHost } from './config/api.js'
+import { isCloudHostedApp } from './utils/cloudHost.js'
 import './App.css'
 
 const apiBase = API_BASE
@@ -46,8 +47,10 @@ async function apiRequest(path, options = {}) {
   } catch {
     const ghPagesHint = isGitHubPagesHost()
       ? ' האתר ב-GitHub Pages דורש שרת API נפרד (הגדר VITE_API_BASE ב-GitHub Actions).'
-      : ' הרץ בטרמינל: npm run api (או npm start להרצה משולבת).'
-    throw new Error(`לא ניתן להתחבר לשרת המקומי.${ghPagesHint}`)
+      : isCloudHostedApp()
+        ? ' שירות ה-API בענן לא מגיב — נסו לרענן בעוד דקה.'
+        : ' הרץ בטרמינל: npm run api (או npm start להרצה משולבת).'
+    throw new Error(`לא ניתן להתחבר לשרת.${ghPagesHint}`)
   }
 
   let data = null
@@ -81,6 +84,7 @@ function App() {
   const [subtitleSettings, setSubtitleSettings] = useState(loadSubtitleSettings)
   const [subtitleLoading, setSubtitleLoading] = useState(false)
   const [subtitleStatus, setSubtitleStatus] = useState('')
+  const [view, setView] = useState('youtube')
   const [liveCaptionStatus, setLiveCaptionStatus] = useState(null)
 
   const activeEpisode = playlistResult?.videos?.[activeEpisodeIndex] ?? null
@@ -223,28 +227,68 @@ function App() {
   }
 
   return (
-    <main className="layout layout--split">
+    <main className={`layout ${view === 'youtube' ? 'layout--split' : 'layout--dashboard'}`}>
       <header className="layout-header">
-        <h1>Schooler Course Studio</h1>
-        <p>יוטיוב + Plyr בצד שמאל · Schooler API בצד ימין</p>
+        <div className="row">
+          <div>
+            <h1>Schooler Course Studio</h1>
+            <p>
+              {view === 'youtube'
+                ? 'יוטיוב · Plyr · כתוביות'
+                : 'דשבורד ביצוע פעולות Schooler ורב מסר'}
+            </p>
+          </div>
+          <nav className="dash-tabs dash-tabs--main app-view-tabs">
+            <button
+              type="button"
+              className={view === 'youtube' ? 'active' : ''}
+              onClick={() => setView('youtube')}
+            >
+              כלים
+            </button>
+            <button
+              type="button"
+              className={view === 'api' ? 'active' : ''}
+              onClick={() => setView('api')}
+            >
+              דשבורד API
+            </button>
+          </nav>
+        </div>
       </header>
 
+      {view === 'api' ? (
+        <ApiDashboard playlistVideos={playlistResult?.videos || []} />
+      ) : (
       <div className="split-columns">
         <section className="column column--youtube">
           <section className="panel">
             <h2>דשבורד יוטיוב קורסים</h2>
           <p>הדבק פלייליסט, צפה בפרקים דרך נגן Plyr, והעתק קוד embed ל-Schooler.</p>
-          {apiOnline === false && (
+          {apiOnline === false && !isCloudHostedApp() && (
             <p className="error">
               השרת המקומי לא פעיל. הרץ בטרמינל: <code>npm run api</code> או <code>npm start</code>
             </p>
           )}
-          {apiOnline === 'outdated' && (
+          {apiOnline === false && isCloudHostedApp() && (
             <p className="error">
-              השרת פועל בגרסה ישנה. עצור והרץ מחדש: <code>npm start</code>
+              שירות ה-API בענן לא זמין כרגע. נסו לרענן את הדף בעוד דקה.
             </p>
           )}
-          {apiOnline === true && <p className="ok">שרת מקומי מחובר ומוכן (כולל כתוביות)</p>}
+          {apiOnline === 'outdated' && (
+            <p className="error">
+              {isCloudHostedApp()
+                ? 'הפריסה בענן מיושנת — המתן לסיום build ב-Vercel ורענן.'
+                : 'השרת פועל בגרסה ישנה. עצור והרץ מחדש: npm start'}
+            </p>
+          )}
+          {apiOnline === true && (
+            <p className="ok">
+              {isCloudHostedApp()
+                ? 'שירות API בענן מחובר (כולל כתוביות)'
+                : 'שרת מקומי מחובר ומוכן (כולל כתוביות)'}
+            </p>
+          )}
 
           <section className="settings-box grid">
             <h3>הגדרות כתוביות</h3>
@@ -438,14 +482,8 @@ function App() {
           </form>
           </section>
         </section>
-
-        <aside className="column column--schooler">
-          <SchoolerPanel
-            playlistVideos={playlistResult?.videos || []}
-            onCopy={copyText}
-          />
-        </aside>
       </div>
+      )}
     </main>
   )
 }
