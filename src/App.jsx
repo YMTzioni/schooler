@@ -8,7 +8,7 @@ import {
   SUBTITLE_TARGET_LANGUAGES,
 } from './constants/subtitleLanguages.js'
 import { API_BASE, isGitHubPagesHost } from './config/api.js'
-import { isCloudHostedApp } from './utils/cloudHost.js'
+import { isCloudHostedApp, isLocalDevApp } from './utils/cloudHost.js'
 import './App.css'
 
 const apiBase = API_BASE
@@ -47,9 +47,9 @@ async function apiRequest(path, options = {}) {
   } catch {
     const ghPagesHint = isGitHubPagesHost()
       ? ' האתר ב-GitHub Pages דורש שרת API נפרד (הגדר VITE_API_BASE ב-GitHub Actions).'
-      : isCloudHostedApp()
-        ? ' שירות ה-API בענן לא מגיב — נסו לרענן בעוד דקה.'
-        : ' הרץ בטרמינל: npm run api (או npm start להרצה משולבת).'
+      : isLocalDevApp()
+        ? ' הרץ בטרמינל: npm run api (או npm start להרצה משולבת).'
+        : ' שירות ה-API בענן לא מגיב — נסו לרענן בעוד דקה.'
     throw new Error(`לא ניתן להתחבר לשרת.${ghPagesHint}`)
   }
 
@@ -265,12 +265,12 @@ function App() {
           <section className="panel">
             <h2>דשבורד יוטיוב קורסים</h2>
           <p>הדבק פלייליסט, צפה בפרקים דרך נגן Plyr, והעתק קוד embed ל-Schooler.</p>
-          {apiOnline === false && !isCloudHostedApp() && (
+          {apiOnline === false && isLocalDevApp() && (
             <p className="error">
               השרת המקומי לא פעיל. הרץ בטרמינל: <code>npm run api</code> או <code>npm start</code>
             </p>
           )}
-          {apiOnline === false && isCloudHostedApp() && (
+          {apiOnline === false && !isLocalDevApp() && (
             <p className="error">
               שירות ה-API בענן לא זמין כרגע. נסו לרענן את הדף בעוד דקה.
             </p>
