@@ -13,9 +13,13 @@ module.exports = async (req, res) => {
     return app(req, res)
   } catch (error) {
     console.error('API handler failed:', error)
-    res.status(500).json({
-      message: error?.message || 'API failed to start',
-      code: 'API_BOOT_ERROR',
-    })
+    res.statusCode = 500
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.end(
+      JSON.stringify({
+        message: error?.message || 'API failed to start',
+        code: 'API_BOOT_ERROR',
+      }),
+    )
   }
 }
