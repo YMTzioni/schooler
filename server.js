@@ -129,7 +129,15 @@ const requireSession = (req, res, next) => {
 
 const handleApiError = (res, error) => {
   if (error.response) {
-    return res.status(error.response.status).json(error.response.data)
+    const { status, data } = error.response
+    if (status === 500 && (!data || data === '')) {
+      return res.status(502).json({
+        message:
+          'Schooler API החזיר שגיאת שרת (500). ייתכן שחסרים Client ID/Client Secret — פנה לתמיכת Schooler.',
+        error: 'schooler_server_error',
+      })
+    }
+    return res.status(status).json(data || { message: 'Schooler API error' })
   }
   return res.status(500).json({ message: error.message || 'Unexpected server error' })
 }
@@ -658,14 +666,18 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
-const schoolerPasswordLogin = async ({ clientId, clientSecret, userId, userSecret }) => {
-  const response = await axios.post(`${BASE_URL}/oauth/token`, {
+const schoolerPasswordLogin = async ({ userId, userSecret, clientId = '', clientSecret = '' }) => {
+  const body = {
     grant_type: 'password',
-    client_id: clientId,
-    client_secret: clientSecret,
     user_id: userId,
     user_secret: userSecret,
-  })
+  }
+  if (clientId && clientSecret) {
+    body.client_id = clientId
+    body.client_secret = clientSecret
+  }
+
+  const response = await axios.post(`${BASE_URL}/oauth/token`, body)
   return response.data
 }
 
@@ -674,8 +686,6 @@ app.get('/api/auth/config', (req, res) => {
   return res.json({
     envReady: Boolean(env),
     userId: env?.userId || null,
-    hasClientId: Boolean(process.env.SCHOOLER_CLIENT_ID?.trim()),
-    hasClientSecret: Boolean(process.env.SCHOOLER_CLIENT_SECRET?.trim()),
     hasUserSecret: Boolean(process.env.SCHOOLER_USER_SECRET?.trim()),
   })
 })
@@ -697,16 +707,14 @@ app.get('/api/auth/status', (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { clientId, clientSecret, userId, userSecret } = req.body
-    if (!clientId || !clientSecret || !userId || !userSecret) {
-      return res.status(400).json({ message: 'חסרים שדות אימות (Client ID, Secret, אימייל, מפתח API)' })
+    const { userId, userSecret } = req.body
+    if (!userId || !userSecret) {
+      return res.status(400).json({ message: 'חסרים אימייל או מפתח API' })
     }
 
-    const token = await schoolerPasswordLogin({ clientId, clientSecret, userId, userSecret })
+    const token = await schoolerPasswordLogin({ userId, userSecret })
 
     const session = createSession({
-      clientId,
-      clientSecret,
       userId,
       userSecret,
       accessToken: token.access_token,
@@ -727,8 +735,7 @@ app.post('/api/auth/login-env', async (req, res) => {
     const env = readSchoolerEnvCredentials()
     if (!env) {
       return res.status(400).json({
-        message:
-          'הגדר ב-.env: SCHOOLER_CLIENT_ID, SCHOOLER_CLIENT_SECRET, SCHOOLER_USER_ID, SCHOOLER_USER_SECRET',
+        message: 'הגדר ב-.env: SCHOOLER_USER_ID ו-SCHOOLER_USER_SECRET',
       })
     }
 
@@ -753,9 +760,9 @@ app.post('/api/auth/refresh', requireSession, async (req, res) => {
     const session = req.session
     const response = await axios.post(`${BASE_URL}/oauth/token`, {
       grant_type: 'refresh_token',
-      client_id: session.clientId,
-      client_secret: session.clientSecret,
       refresh_token: session.refreshToken,
+      user_id: session.userId,
+      user_secret: session.userSecret,
     })
 
     const updatedSession = {

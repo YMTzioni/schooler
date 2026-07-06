@@ -19,7 +19,8 @@ async function schoolerRequest(path, options = {}) {
   }
 
   if (!response.ok) {
-    throw new Error(data?.message || `שגיאת Schooler (${response.status})`)
+    const oauthMsg = data?.error_description || data?.error?.message || data?.error
+    throw new Error(data?.message || oauthMsg || `שגיאת Schooler (${response.status})`)
   }
 
   return data

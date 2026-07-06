@@ -20,9 +20,9 @@ const loadSavedAuth = () => {
     const saved = localStorage.getItem(AUTH_STORAGE_KEY)
     return saved
       ? JSON.parse(saved)
-      : { clientId: '', clientSecret: '', userId: '', userSecret: '' }
+      : { userId: '', userSecret: '' }
   } catch {
-    return { clientId: '', clientSecret: '', userId: '', userSecret: '' }
+    return { userId: '', userSecret: '' }
   }
 }
 
@@ -231,11 +231,11 @@ export default function SchoolerPanel({ onCopy, playlistVideos = [] }) {
       <section className="panel schooler-panel">
         <h2>Schooler API</h2>
         <p className="note">
-          התחברות לפי{' '}
+          התחברות עם אימייל Schooler ומפתח API לפי{' '}
           <a href="https://app.swaggerhub.com/apis/Responder/SchoolerAPI/1.0.0" target="_blank" rel="noreferrer">
             תיעוד Schooler API
           </a>
-          . המפתח שקיבלת הוא <strong>User Secret</strong> (מפתח API).
+          .
         </p>
 
         {envConfig.envReady && (
@@ -249,31 +249,13 @@ export default function SchoolerPanel({ onCopy, playlistVideos = [] }) {
 
         <form onSubmit={handleLogin} className="grid schooler-login">
           <label>
-            Client ID
-            <input
-              value={authForm.clientId}
-              onChange={(e) => persistAuthForm({ ...authForm, clientId: e.target.value })}
-              required
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            Client Secret
-            <input
-              type="password"
-              value={authForm.clientSecret}
-              onChange={(e) => persistAuthForm({ ...authForm, clientSecret: e.target.value })}
-              required
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            User ID (אימייל)
+            אימייל (User ID)
             <input
               value={authForm.userId}
               onChange={(e) => persistAuthForm({ ...authForm, userId: e.target.value })}
               required
               autoComplete="username"
+              placeholder="support@successcollege.co.il"
             />
           </label>
           <label>
