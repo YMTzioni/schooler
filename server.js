@@ -1388,4 +1388,4 @@ if (!isVercel) {
   })
 }
 
-export default app
+export { app }
