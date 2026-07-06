@@ -27,6 +27,7 @@ import {
   buildProtectedEmbedWrapper,
   buildYouTubeEmbedUrl,
 } from './lib/youtubeEmbed.js'
+import { readSchoolerEnvCredentials } from './lib/schoolerApi.js'
 
 const app = express()
 const PORT = process.env.PORT || 3030
@@ -657,6 +658,28 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
+const schoolerPasswordLogin = async ({ clientId, clientSecret, userId, userSecret }) => {
+  const response = await axios.post(`${BASE_URL}/oauth/token`, {
+    grant_type: 'password',
+    client_id: clientId,
+    client_secret: clientSecret,
+    user_id: userId,
+    user_secret: userSecret,
+  })
+  return response.data
+}
+
+app.get('/api/auth/config', (req, res) => {
+  const env = readSchoolerEnvCredentials()
+  return res.json({
+    envReady: Boolean(env),
+    userId: env?.userId || null,
+    hasClientId: Boolean(process.env.SCHOOLER_CLIENT_ID?.trim()),
+    hasClientSecret: Boolean(process.env.SCHOOLER_CLIENT_SECRET?.trim()),
+    hasUserSecret: Boolean(process.env.SCHOOLER_USER_SECRET?.trim()),
+  })
+})
+
 app.get('/api/auth/status', (req, res) => {
   const session = getSession(req)
   if (!session) {
@@ -676,30 +699,50 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { clientId, clientSecret, userId, userSecret } = req.body
     if (!clientId || !clientSecret || !userId || !userSecret) {
-      return res.status(400).json({ message: 'Missing authentication fields' })
+      return res.status(400).json({ message: 'חסרים שדות אימות (Client ID, Secret, אימייל, מפתח API)' })
     }
 
-    const response = await axios.post(`${BASE_URL}/oauth/token`, {
-      grant_type: 'password',
-      client_id: clientId,
-      client_secret: clientSecret,
-      user_id: userId,
-      user_secret: userSecret,
-    })
+    const token = await schoolerPasswordLogin({ clientId, clientSecret, userId, userSecret })
 
     const session = createSession({
       clientId,
       clientSecret,
       userId,
       userSecret,
-      accessToken: response.data.access_token,
-      refreshToken: response.data.refresh_token,
-      tokenType: response.data.token_type,
-      expiresIn: response.data.expires_in,
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+      tokenType: token.token_type,
+      expiresIn: token.expires_in,
     })
 
     res.cookie('schooler_session_id', session.id, authCookieOptions)
     return res.json({ loggedIn: true, userId, tokenType: session.tokenType })
+  } catch (error) {
+    return handleApiError(res, error)
+  }
+})
+
+app.post('/api/auth/login-env', async (req, res) => {
+  try {
+    const env = readSchoolerEnvCredentials()
+    if (!env) {
+      return res.status(400).json({
+        message:
+          'הגדר ב-.env: SCHOOLER_CLIENT_ID, SCHOOLER_CLIENT_SECRET, SCHOOLER_USER_ID, SCHOOLER_USER_SECRET',
+      })
+    }
+
+    const token = await schoolerPasswordLogin(env)
+    const session = createSession({
+      ...env,
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+      tokenType: token.token_type,
+      expiresIn: token.expires_in,
+    })
+
+    res.cookie('schooler_session_id', session.id, authCookieOptions)
+    return res.json({ loggedIn: true, userId: env.userId, tokenType: session.tokenType, fromEnv: true })
   } catch (error) {
     return handleApiError(res, error)
   }
@@ -752,6 +795,38 @@ app.get('/api/schools', requireSession, async (req, res) => {
   try {
     const client = buildClient(req.session)
     const response = await client.get('/api/v1/schools', { params: req.query })
+    return res.json(response.data)
+  } catch (error) {
+    return handleApiError(res, error)
+  }
+})
+
+app.get('/api/courses/:courseId', requireSession, async (req, res) => {
+  try {
+    const client = buildClient(req.session)
+    const response = await client.get(`/api/v1/courses/${req.params.courseId}`)
+    return res.json(response.data)
+  } catch (error) {
+    return handleApiError(res, error)
+  }
+})
+
+app.get('/api/courses/:courseId/lessons', requireSession, async (req, res) => {
+  try {
+    const client = buildClient(req.session)
+    const response = await client.get(`/api/v1/courses/${req.params.courseId}/lessons`, {
+      params: req.query,
+    })
+    return res.json(response.data)
+  } catch (error) {
+    return handleApiError(res, error)
+  }
+})
+
+app.get('/api/schools/:schoolId', requireSession, async (req, res) => {
+  try {
+    const client = buildClient(req.session)
+    const response = await client.get(`/api/v1/schools/${req.params.schoolId}`)
     return res.json(response.data)
   } catch (error) {
     return handleApiError(res, error)

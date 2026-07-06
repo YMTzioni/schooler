@@ -1,9 +1,112 @@
 .layout {
-  max-width: 980px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 2rem 1rem 4rem;
   color: #e4e8f1;
   font-family: Arial, sans-serif;
+}
+
+.layout--split .layout-header {
+  margin-bottom: 1.25rem;
+}
+
+.split-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.column--youtube {
+  min-width: 0;
+}
+
+.column--schooler {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+}
+
+.schooler-panel h2 {
+  margin-top: 0;
+}
+
+.schooler-env-banner {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  border-radius: 8px;
+  background: #0a1a12;
+  border: 1px solid #2d6b4a;
+}
+
+.schooler-lessons-wrap {
+  margin-top: 1rem;
+}
+
+.schooler-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.schooler-table th,
+.schooler-table td {
+  border: 1px solid #27324d;
+  padding: 0.45rem 0.5rem;
+  text-align: right;
+  vertical-align: top;
+}
+
+.schooler-table th {
+  background: #0a1120;
+}
+
+.schooler-lesson-link a {
+  color: #8eb4ff;
+  word-break: break-all;
+}
+
+.schooler-btn-sm {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.82rem;
+}
+
+.schooler-badge {
+  display: inline-block;
+  margin-inline-start: 0.4rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: #27324d;
+  font-size: 0.8rem;
+}
+
+.schooler-output {
+  max-height: 220px;
+  margin-top: 0.75rem;
+  font-size: 0.78rem;
+}
+
+.schooler-advanced {
+  margin-top: 1rem;
+}
+
+.schooler-advanced summary {
+  cursor: pointer;
+  color: #a7b8e6;
+}
+
+@media (max-width: 1024px) {
+  .split-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .column--schooler {
+    position: static;
+    max-height: none;
+  }
 }
 
 .panel {

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
+import SchoolerPanel from './components/SchoolerPanel.jsx'
 import { buildPlyrEmbedCode } from './utils/plyrEmbed.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
@@ -70,25 +71,6 @@ async function apiRequest(path, options = {}) {
 }
 
 function App() {
-  const [mode, setMode] = useState('youtube')
-  const [authStatus, setAuthStatus] = useState({ loading: true, loggedIn: false })
-  const [authForm, setAuthForm] = useState({
-    clientId: '',
-    clientSecret: '',
-    userId: '',
-    userSecret: '',
-  })
-  const [dashboard, setDashboard] = useState({
-    loading: false,
-    error: '',
-    response: null,
-  })
-  const [proxyForm, setProxyForm] = useState({
-    method: 'GET',
-    path: '/api/v1/courses',
-    query: '{"page":1,"per_page":20}',
-    body: '{}',
-  })
   const [playlistUrl, setPlaylistUrl] = useState('')
   const [playlistResult, setPlaylistResult] = useState(null)
   const [playlistLoading, setPlaylistLoading] = useState(false)
@@ -107,25 +89,7 @@ function App() {
     setLiveCaptionStatus(null)
   }, [activeEpisode?.videoId])
 
-  const prettyResponse = useMemo(() => {
-    if (!dashboard.response) return ''
-    return JSON.stringify(dashboard.response, null, 2)
-  }, [dashboard.response])
-
   useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const data = await apiRequest('/auth/status', { method: 'GET' })
-        setAuthStatus({ loading: false, ...data })
-      } catch {
-        setAuthStatus({ loading: false, loggedIn: false })
-      }
-    }
-    checkStatus()
-  }, [])
-
-  useEffect(() => {
-    if (mode !== 'youtube') return
     const checkApi = async () => {
       try {
         const data = await apiRequest('/health', { method: 'GET' })
@@ -135,65 +99,7 @@ function App() {
       }
     }
     checkApi()
-  }, [mode])
-
-  const runAction = async (label, fn) => {
-    setDashboard({ loading: true, error: '', response: { action: label } })
-    try {
-      const data = await fn()
-      setDashboard({ loading: false, error: '', response: data })
-    } catch (error) {
-      setDashboard({ loading: false, error: error.message, response: null })
-    }
-  }
-
-  const onLogin = async (event) => {
-    event.preventDefault()
-    await runAction('Authenticate', async () =>
-      apiRequest('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(authForm),
-      }),
-    )
-    const status = await apiRequest('/auth/status', { method: 'GET' })
-    setAuthStatus({ loading: false, ...status })
-  }
-
-  const onLogout = async () => {
-    await runAction('Logout', async () =>
-      apiRequest('/auth/logout', { method: 'POST', body: '{}' }),
-    )
-    setAuthStatus({ loading: false, loggedIn: false })
-  }
-
-  const runProxy = async (event) => {
-    event.preventDefault()
-    let query = {}
-    let body = {}
-    try {
-      query = proxyForm.query ? JSON.parse(proxyForm.query) : {}
-      body = proxyForm.body ? JSON.parse(proxyForm.body) : {}
-    } catch {
-      setDashboard({
-        loading: false,
-        error: 'JSON לא תקין בשדות Query או Body',
-        response: null,
-      })
-      return
-    }
-
-    await runAction('Custom API action', async () =>
-      apiRequest('/proxy', {
-        method: 'POST',
-        body: JSON.stringify({
-          method: proxyForm.method,
-          path: proxyForm.path,
-          query,
-          body,
-        }),
-      }),
-    )
-  }
+  }, [])
 
   const copyText = async (value, label) => {
     try {
@@ -317,26 +223,16 @@ function App() {
   }
 
   return (
-    <main className="layout">
-      <header>
-        <h1>Schooler Local Control</h1>
-        <p>דשבורד YouTube לקורסים + חיבור אופציונלי ל-Schooler</p>
+    <main className="layout layout--split">
+      <header className="layout-header">
+        <h1>Schooler Course Studio</h1>
+        <p>יוטיוב + Plyr בצד שמאל · Schooler API בצד ימין</p>
       </header>
 
-      <section className="panel">
-        <div className="actions">
-          <button type="button" onClick={() => setMode('youtube')}>
-            דשבורד יוטיוב קורסים
-          </button>
-          <button type="button" onClick={() => setMode('schooler')}>
-            חיבור Schooler (אופציונלי)
-          </button>
-        </div>
-      </section>
-
-      {mode === 'youtube' ? (
-        <section className="panel">
-          <h2>דשבורד יוטיוב קורסים</h2>
+      <div className="split-columns">
+        <section className="column column--youtube">
+          <section className="panel">
+            <h2>דשבורד יוטיוב קורסים</h2>
           <p>הדבק פלייליסט, צפה בפרקים דרך נגן Plyr, והעתק קוד embed ל-Schooler.</p>
           {apiOnline === false && (
             <p className="error">
@@ -540,132 +436,16 @@ function App() {
               </div>
             ) : null}
           </form>
+          </section>
         </section>
-      ) : authStatus.loading ? (
-        <p>טוען סטטוס התחברות...</p>
-      ) : !authStatus.loggedIn ? (
-        <section className="panel">
-          <h2>מסך התחברות ל-Schooler (אופציונלי)</h2>
-          <form onSubmit={onLogin} className="grid">
-            <label>
-              Client ID
-              <input
-                value={authForm.clientId}
-                onChange={(e) => setAuthForm({ ...authForm, clientId: e.target.value })}
-                required
-              />
-            </label>
-            <label>
-              Client Secret
-              <input
-                type="password"
-                value={authForm.clientSecret}
-                onChange={(e) => setAuthForm({ ...authForm, clientSecret: e.target.value })}
-                required
-              />
-            </label>
-            <label>
-              User ID (email)
-              <input
-                value={authForm.userId}
-                onChange={(e) => setAuthForm({ ...authForm, userId: e.target.value })}
-                required
-              />
-            </label>
-            <label>
-              User Secret
-              <input
-                type="password"
-                value={authForm.userSecret}
-                onChange={(e) => setAuthForm({ ...authForm, userSecret: e.target.value })}
-                required
-              />
-            </label>
-            <button type="submit">התחבר ל-API</button>
-          </form>
-        </section>
-      ) : (
-        <section className="panel">
-          <div className="row">
-            <h2>דשבורד פעולות Schooler</h2>
-            <button type="button" onClick={onLogout}>
-              ניתוק
-            </button>
-          </div>
 
-          <div className="actions">
-            <button
-              type="button"
-              onClick={() => runAction('List Courses', () => apiRequest('/courses', { method: 'GET' }))}
-            >
-              קבל קורסים
-            </button>
-            <button
-              type="button"
-              onClick={() => runAction('List Schools', () => apiRequest('/schools', { method: 'GET' }))}
-            >
-              קבל בתי ספר
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                runAction('Refresh Token', () =>
-                  apiRequest('/auth/refresh', { method: 'POST', body: '{}' }),
-                )
-              }
-            >
-              רענון טוקן
-            </button>
-          </div>
-
-          <form onSubmit={runProxy} className="grid">
-            <h3>פעולה מותאמת אישית</h3>
-            <label>
-              Method
-              <select
-                value={proxyForm.method}
-                onChange={(e) => setProxyForm({ ...proxyForm, method: e.target.value })}
-              >
-                <option>GET</option>
-                <option>POST</option>
-                <option>PUT</option>
-                <option>DELETE</option>
-              </select>
-            </label>
-            <label>
-              Path
-              <input
-                value={proxyForm.path}
-                onChange={(e) => setProxyForm({ ...proxyForm, path: e.target.value })}
-              />
-            </label>
-            <label>
-              Query (JSON)
-              <textarea
-                rows="3"
-                value={proxyForm.query}
-                onChange={(e) => setProxyForm({ ...proxyForm, query: e.target.value })}
-              />
-            </label>
-            <label>
-              Body (JSON)
-              <textarea
-                rows="5"
-                value={proxyForm.body}
-                onChange={(e) => setProxyForm({ ...proxyForm, body: e.target.value })}
-              />
-            </label>
-            <button type="submit">הרץ פעולה</button>
-          </form>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>פלט</h2>
-        {dashboard.loading && <p>מריץ פעולה...</p>}
-        {dashboard.error && <p className="error">{dashboard.error}</p>}
-        {!dashboard.loading && !dashboard.error && prettyResponse && <pre>{prettyResponse}</pre>}
-      </section>
+        <aside className="column column--schooler">
+          <SchoolerPanel
+            playlistVideos={playlistResult?.videos || []}
+            onCopy={copyText}
+          />
+        </aside>
+      </div>
     </main>
   )
 }
