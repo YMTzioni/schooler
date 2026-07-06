@@ -5,6 +5,7 @@ import axios from 'axios'
 import cookieParser from 'cookie-parser'
 import crypto from 'node:crypto'
 import path from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import {
   parseVttCues,
@@ -27,12 +28,26 @@ import {
   buildProtectedEmbedWrapper,
   buildYouTubeEmbedUrl,
 } from './lib/youtubeEmbed.js'
-import { readSchoolerEnvCredentials } from './lib/schoolerApi.js'
+import {
+  buildSchoolerPasswordOAuthBody,
+  buildSchoolerRefreshOAuthBody,
+  parseSchoolerOAuthResponse,
+  readSchoolerEnvClientCredentials,
+  readSchoolerEnvCredentials,
+  readSchoolerEnvUserCredentials,
+  SCHOOLER_API_BASE,
+} from './lib/schoolerApi.js'
+import {
+  buildResponderOAuthBody,
+  parseResponderOAuthResponse,
+  readResponderEnvCredentials,
+  RESPONDER_API_BASE,
+} from './lib/responderApi.js'
 
 const app = express()
 const PORT = process.env.PORT || 3030
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
-const BASE_URL = 'https://api.schooler.biz'
+const BASE_URL = SCHOOLER_API_BASE
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distPath = path.join(__dirname, 'dist')
 const isProduction = process.env.NODE_ENV === 'production'
@@ -75,6 +90,7 @@ app.use(express.json({ limit: '1mb' }))
 app.use(cookieParser())
 
 const sessions = new Map()
+const responderSessions = new Map()
 const VIDEO_TRANSLATION_CACHE = new Map()
 const VIDEO_TRANSLATION_CACHE_LIMIT = 40
 
@@ -106,16 +122,124 @@ const createSession = (data) => {
     refreshToken: data.refreshToken,
     tokenType: data.tokenType,
     expiresIn: data.expiresIn,
-    createdAt: Date.now(),
+    expiresAt: data.expiresAt,
+    createdAt: data.createdAt || Date.now(),
   }
   sessions.set(id, session)
   return session
+}
+
+const saveSchoolerOAuthSnapshot = async (raw) => {
+  const snapshotPath = path.join(__dirname, '.schooler-oauth.json')
+  await writeFile(snapshotPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8')
+}
+
+const schoolerPasswordLogin = async (credentials) => {
+  const { clientId, clientSecret } = credentials
+  if (!clientId || !clientSecret) {
+    const error = new Error('חסרים Client ID / Client Secret — פנו לתמיכת Schooler (support@responder.co.il)')
+    error.status = 400
+    throw error
+  }
+
+  const response = await axios.post(
+    `${BASE_URL}/oauth/token`,
+    buildSchoolerPasswordOAuthBody(credentials),
+    { headers: { 'Content-Type': 'application/json' } },
+  )
+  return parseSchoolerOAuthResponse(response.data)
+}
+
+const schoolerRefreshToken = async ({ refreshToken, clientId, clientSecret }) => {
+  if (!clientId || !clientSecret) {
+    const error = new Error('חסרים Client ID / Client Secret לרענון טוקן')
+    error.status = 400
+    throw error
+  }
+
+  const response = await axios.post(
+    `${BASE_URL}/oauth/token`,
+    buildSchoolerRefreshOAuthBody({ refreshToken, clientId, clientSecret }),
+    { headers: { 'Content-Type': 'application/json' } },
+  )
+  return parseSchoolerOAuthResponse(response.data)
+}
+
+const buildSchoolerSessionFromOAuth = (credentials, oauth) =>
+  createSession({
+    ...credentials,
+    accessToken: oauth.accessToken,
+    refreshToken: oauth.refreshToken,
+    tokenType: oauth.tokenType,
+    expiresIn: oauth.expiresIn,
+    expiresAt: oauth.expiresAt,
+    createdAt: oauth.createdAt,
+  })
+
+const refreshSchoolerSessionToken = async (session) => {
+  const oauth = await schoolerRefreshToken({
+    refreshToken: session.refreshToken,
+    clientId: session.clientId,
+    clientSecret: session.clientSecret,
+  })
+  await saveSchoolerOAuthSnapshot(oauth.raw).catch(() => {})
+  const updated = {
+    ...session,
+    accessToken: oauth.accessToken,
+    refreshToken: oauth.refreshToken,
+    tokenType: oauth.tokenType,
+    expiresIn: oauth.expiresIn,
+    expiresAt: oauth.expiresAt,
+    createdAt: oauth.createdAt,
+  }
+  sessions.set(session.id, updated)
+  return updated
+}
+
+const withSchoolerSession = async (req, res, handler) => {
+  try {
+    let session = req.session
+    if (session.expiresAt && session.expiresAt <= Date.now()) {
+      session = await refreshSchoolerSessionToken(session)
+      req.session = session
+    }
+    return await handler(buildClient(session), session)
+  } catch (error) {
+    if (error.response?.status === 401 && req.session?.refreshToken) {
+      try {
+        const session = await refreshSchoolerSessionToken(req.session)
+        req.session = session
+        return await handler(buildClient(session), session)
+      } catch (retryError) {
+        return handleApiError(res, retryError)
+      }
+    }
+    return handleApiError(res, error)
+  }
+}
+
+const resolveSchoolerCredentials = (body = {}) => {
+  const envUser = readSchoolerEnvUserCredentials()
+  const envClient = readSchoolerEnvClientCredentials()
+  const userId = body.userId?.trim() || body.user_id?.trim() || envUser?.userId
+  const userSecret = body.userSecret?.trim() || body.user_secret?.trim() || envUser?.userSecret
+  const clientId = body.clientId?.trim() || body.client_id?.trim() || envClient?.clientId
+  const clientSecret =
+    body.clientSecret?.trim() || body.client_secret?.trim() || envClient?.clientSecret
+  if (!userId || !userSecret || !clientId || !clientSecret) return null
+  return { userId, userSecret, clientId, clientSecret }
 }
 
 const getSession = (req) => {
   const sessionId = req.cookies.schooler_session_id
   if (!sessionId) return null
   return sessions.get(sessionId) || null
+}
+
+const getResponderSession = (req) => {
+  const sessionId = req.cookies.responder_session_id
+  if (!sessionId) return null
+  return responderSessions.get(sessionId) || null
 }
 
 const requireSession = (req, res, next) => {
@@ -127,13 +251,22 @@ const requireSession = (req, res, next) => {
   return next()
 }
 
+const requireResponderSession = (req, res, next) => {
+  const session = getResponderSession(req)
+  if (!session) {
+    return res.status(401).json({ message: 'אין חיבור פעיל לרב מסר. התחברו מחדש.' })
+  }
+  req.responderSession = session
+  return next()
+}
+
 const handleApiError = (res, error) => {
   if (error.response) {
     const { status, data } = error.response
     if (status === 500 && (!data || data === '')) {
       return res.status(502).json({
         message:
-          'Schooler API החזיר שגיאת שרת (500). ייתכן שחסרים Client ID/Client Secret — פנה לתמיכת Schooler.',
+          'Schooler API החזיר שגיאת שרת (500). ודאו ש-Client ID/Client Secret ו-User ID/User Secret תקינים — פנו לתמיכת Schooler.',
         error: 'schooler_server_error',
       })
     }
@@ -323,31 +456,7 @@ const transcriptToVtt = (segments) => {
   return vtt.trim()
 }
 
-const pickSourceTrack = (tracks, lang) => {
-  if (!tracks.length) return null
-
-  const matchesLang = (track, requestedLang) => {
-    if (requestedLang === 'he') return track.lang === 'he' || track.lang === 'iw'
-    if (requestedLang === 'iw') return track.lang === 'he' || track.lang === 'iw'
-    return track.lang === requestedLang
-  }
-
-  if (lang && lang !== 'auto') {
-    return tracks.find((track) => matchesLang(track, lang)) || null
-  }
-
-  const manualHebrew = tracks.find(
-    (track) => (track.lang === 'he' || track.lang === 'iw') && !track.isAuto,
-  )
-  if (manualHebrew) return manualHebrew
-
-  const manualEnglish = tracks.find((track) => track.lang === 'en' && !track.isAuto)
-  if (manualEnglish) return manualEnglish
-
-  const anyManual = tracks.find((track) => !track.isAuto)
-  return anyManual || tracks[0]
-}
-
+import { pickBestSourceTrack } from './lib/captionTrackUtils.js'
 const vttToSrt = (vtt) => {
   const blocks = vtt.replace(/\r/g, '').split(/\n\n+/)
   let srt = ''
@@ -543,7 +652,7 @@ const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' 
       meta: fetchMeta,
     })
     const tracks = trackInfo.tracks
-    const sourceTrack = pickSourceTrack(tracks, lang)
+    const sourceTrack = pickBestSourceTrack(tracks, lang)
     let content = ''
     let sourceLang = sourceTrack?.lang || lang
     let sourceName = sourceTrack?.name || sourceLang
@@ -662,31 +771,28 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     service: 'schooler-local-bridge',
     version: '1.3.6',
-    features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status', 'subtitle-translate'],
+    features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status', 'subtitle-translate', 'schooler-api', 'responder-api-v2'],
   })
 })
 
-const schoolerPasswordLogin = async ({ userId, userSecret, clientId = '', clientSecret = '' }) => {
-  const body = {
-    grant_type: 'password',
-    user_id: userId,
-    user_secret: userSecret,
-  }
-  if (clientId && clientSecret) {
-    body.client_id = clientId
-    body.client_secret = clientSecret
-  }
-
-  const response = await axios.post(`${BASE_URL}/oauth/token`, body)
-  return response.data
-}
-
 app.get('/api/auth/config', (req, res) => {
   const env = readSchoolerEnvCredentials()
+  const envClient = readSchoolerEnvClientCredentials()
+  const envUser = readSchoolerEnvUserCredentials()
+  const missing = []
+  if (!envUser?.userId) missing.push('SCHOOLER_USER_ID')
+  if (!envUser?.userSecret) missing.push('SCHOOLER_USER_SECRET')
+  if (!envClient?.clientId) missing.push('SCHOOLER_CLIENT_ID')
+  if (!envClient?.clientSecret) missing.push('SCHOOLER_CLIENT_SECRET')
+
   return res.json({
     envReady: Boolean(env),
-    userId: env?.userId || null,
-    hasUserSecret: Boolean(process.env.SCHOOLER_USER_SECRET?.trim()),
+    hasClientCredentials: Boolean(envClient),
+    hasUserCredentials: Boolean(envUser),
+    userId: envUser?.userId || null,
+    hasUserSecret: Boolean(envUser?.userSecret),
+    missing,
+    needsClientOnly: Boolean(envUser && !envClient),
   })
 })
 
@@ -701,31 +807,36 @@ app.get('/api/auth/status', (req, res) => {
     userId: session.userId,
     tokenType: session.tokenType,
     expiresIn: session.expiresIn,
+    expiresAt: session.expiresAt,
     createdAt: session.createdAt,
   })
 })
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { userId, userSecret } = req.body
-    if (!userId || !userSecret) {
-      return res.status(400).json({ message: 'חסרים אימייל או מפתח API' })
+    const creds = resolveSchoolerCredentials(req.body)
+    if (!creds) {
+      return res.status(400).json({
+        message:
+          'חסרים פרטי התחברות. נדרשים Client ID/Secret (מתמיכה) + User ID (אימייל) + User Secret (מפתח API).',
+      })
     }
 
-    const token = await schoolerPasswordLogin({ userId, userSecret })
-
-    const session = createSession({
-      userId,
-      userSecret,
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-      tokenType: token.token_type,
-      expiresIn: token.expires_in,
-    })
+    const oauth = await schoolerPasswordLogin(creds)
+    await saveSchoolerOAuthSnapshot(oauth.raw).catch(() => {})
+    const session = buildSchoolerSessionFromOAuth(creds, oauth)
 
     res.cookie('schooler_session_id', session.id, authCookieOptions)
-    return res.json({ loggedIn: true, userId, tokenType: session.tokenType })
+    return res.json({
+      loggedIn: true,
+      userId: session.userId,
+      tokenType: session.tokenType,
+      expiresAt: session.expiresAt,
+    })
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message })
+    }
     return handleApiError(res, error)
   }
 })
@@ -735,21 +846,23 @@ app.post('/api/auth/login-env', async (req, res) => {
     const env = readSchoolerEnvCredentials()
     if (!env) {
       return res.status(400).json({
-        message: 'הגדר ב-.env: SCHOOLER_USER_ID ו-SCHOOLER_USER_SECRET',
+        message:
+          'הגדר ב-.env: SCHOOLER_USER_ID, SCHOOLER_USER_SECRET, SCHOOLER_CLIENT_ID, SCHOOLER_CLIENT_SECRET',
       })
     }
 
-    const token = await schoolerPasswordLogin(env)
-    const session = createSession({
-      ...env,
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
-      tokenType: token.token_type,
-      expiresIn: token.expires_in,
-    })
+    const oauth = await schoolerPasswordLogin(env)
+    await saveSchoolerOAuthSnapshot(oauth.raw).catch(() => {})
+    const session = buildSchoolerSessionFromOAuth(env, oauth)
 
     res.cookie('schooler_session_id', session.id, authCookieOptions)
-    return res.json({ loggedIn: true, userId: env.userId, tokenType: session.tokenType, fromEnv: true })
+    return res.json({
+      loggedIn: true,
+      userId: env.userId,
+      tokenType: session.tokenType,
+      expiresAt: session.expiresAt,
+      fromEnv: true,
+    })
   } catch (error) {
     return handleApiError(res, error)
   }
@@ -757,27 +870,17 @@ app.post('/api/auth/login-env', async (req, res) => {
 
 app.post('/api/auth/refresh', requireSession, async (req, res) => {
   try {
-    const session = req.session
-    const response = await axios.post(`${BASE_URL}/oauth/token`, {
-      grant_type: 'refresh_token',
-      refresh_token: session.refreshToken,
-      user_id: session.userId,
-      user_secret: session.userSecret,
+    const session = await refreshSchoolerSessionToken(req.session)
+    req.session = session
+    return res.json({
+      refreshed: true,
+      tokenType: session.tokenType,
+      expiresAt: session.expiresAt,
     })
-
-    const updatedSession = {
-      ...session,
-      accessToken: response.data.access_token,
-      refreshToken: response.data.refresh_token,
-      tokenType: response.data.token_type,
-      expiresIn: response.data.expires_in,
-      createdAt: Date.now(),
-    }
-    sessions.set(session.id, updatedSession)
-    req.session = updatedSession
-
-    return res.json({ refreshed: true, tokenType: updatedSession.tokenType })
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message })
+    }
     return handleApiError(res, error)
   }
 })
@@ -788,76 +891,56 @@ app.post('/api/auth/logout', requireSession, (req, res) => {
   return res.json({ loggedOut: true })
 })
 
-app.get('/api/courses', requireSession, async (req, res) => {
-  try {
-    const client = buildClient(req.session)
+app.get('/api/courses', requireSession, async (req, res) =>
+  withSchoolerSession(req, res, async (client) => {
     const response = await client.get('/api/v1/courses', { params: req.query })
     return res.json(response.data)
-  } catch (error) {
-    return handleApiError(res, error)
-  }
-})
+  }),
+)
 
-app.get('/api/schools', requireSession, async (req, res) => {
-  try {
-    const client = buildClient(req.session)
+app.get('/api/schools', requireSession, async (req, res) =>
+  withSchoolerSession(req, res, async (client) => {
     const response = await client.get('/api/v1/schools', { params: req.query })
     return res.json(response.data)
-  } catch (error) {
-    return handleApiError(res, error)
-  }
-})
+  }),
+)
 
-app.get('/api/courses/:courseId', requireSession, async (req, res) => {
-  try {
-    const client = buildClient(req.session)
+app.get('/api/courses/:courseId', requireSession, async (req, res) =>
+  withSchoolerSession(req, res, async (client) => {
     const response = await client.get(`/api/v1/courses/${req.params.courseId}`)
     return res.json(response.data)
-  } catch (error) {
-    return handleApiError(res, error)
-  }
-})
+  }),
+)
 
-app.get('/api/courses/:courseId/lessons', requireSession, async (req, res) => {
-  try {
-    const client = buildClient(req.session)
+app.get('/api/courses/:courseId/lessons', requireSession, async (req, res) =>
+  withSchoolerSession(req, res, async (client) => {
     const response = await client.get(`/api/v1/courses/${req.params.courseId}/lessons`, {
       params: req.query,
     })
     return res.json(response.data)
-  } catch (error) {
-    return handleApiError(res, error)
-  }
-})
+  }),
+)
 
-app.get('/api/schools/:schoolId', requireSession, async (req, res) => {
-  try {
-    const client = buildClient(req.session)
+app.get('/api/schools/:schoolId', requireSession, async (req, res) =>
+  withSchoolerSession(req, res, async (client) => {
     const response = await client.get(`/api/v1/schools/${req.params.schoolId}`)
     return res.json(response.data)
-  } catch (error) {
-    return handleApiError(res, error)
-  }
-})
+  }),
+)
 
-app.get('/api/students/search', requireSession, async (req, res) => {
-  try {
-    const client = buildClient(req.session)
+app.get('/api/students/search', requireSession, async (req, res) =>
+  withSchoolerSession(req, res, async (client) => {
     const response = await client.get('/api/v1/students/search', { params: req.query })
     return res.json(response.data)
-  } catch (error) {
-    return handleApiError(res, error)
-  }
-})
+  }),
+)
 
-app.post('/api/proxy', requireSession, async (req, res) => {
-  try {
+app.post('/api/proxy', requireSession, async (req, res) =>
+  withSchoolerSession(req, res, async (client) => {
     const { method = 'GET', path, query, body } = req.body
     if (!path || !path.startsWith('/')) {
       return res.status(400).json({ message: 'path is required and must start with /' })
     }
-
-    const client = buildClient(req.session)
     const response = await client.request({
       method,
       url: path,
@@ -865,9 +948,240 @@ app.post('/api/proxy', requireSession, async (req, res) => {
       data: body,
     })
     return res.json(response.data)
+  }),
+)
+
+const createResponderSession = (data) => {
+  const id = crypto.randomUUID()
+  const session = {
+    id,
+    clientId: data.clientId,
+    clientSecret: data.clientSecret,
+    userToken: data.userToken,
+    accessToken: data.accessToken,
+    username: data.username || null,
+    name: data.name || null,
+    accountId: data.accountId ?? null,
+    createdAt: Date.now(),
+    expiresAt: data.expiresAt,
+  }
+  responderSessions.set(id, session)
+  return session
+}
+
+const saveResponderOAuthSnapshot = async (raw) => {
+  const snapshotPath = path.join(__dirname, '.responder-oauth.json')
+  await writeFile(snapshotPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf8')
+}
+
+const responderOAuthLogin = async (credentials) => {
+  const response = await axios.post(
+    `${RESPONDER_API_BASE}/oauth/token`,
+    buildResponderOAuthBody(credentials),
+    { headers: { 'Content-Type': 'application/json' } },
+  )
+  return parseResponderOAuthResponse(response.data)
+}
+
+const buildResponderSessionFromOAuth = (credentials, oauth) =>
+  createResponderSession({
+    ...credentials,
+    accessToken: oauth.accessToken,
+    username: oauth.username,
+    name: oauth.name,
+    accountId: oauth.accountId,
+    expiresAt: oauth.expiresAt,
+  })
+
+const buildResponderClient = (session) =>
+  axios.create({
+    baseURL: RESPONDER_API_BASE,
+    headers: {
+      Authorization: `Bearer ${session.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+  })
+
+const refreshResponderSessionToken = async (session) => {
+  const oauth = await responderOAuthLogin({
+    clientId: session.clientId,
+    clientSecret: session.clientSecret,
+    userToken: session.userToken,
+  })
+  await saveResponderOAuthSnapshot(oauth.raw).catch(() => {})
+  const updated = {
+    ...session,
+    accessToken: oauth.accessToken,
+    username: oauth.username || session.username,
+    name: oauth.name || session.name,
+    accountId: oauth.accountId ?? session.accountId,
+    createdAt: Date.now(),
+    expiresAt: oauth.expiresAt,
+  }
+  responderSessions.set(session.id, updated)
+  return updated
+}
+
+const withResponderSession = async (req, res, handler) => {
+  try {
+    let session = req.responderSession
+    if (session.expiresAt <= Date.now()) {
+      session = await refreshResponderSessionToken(session)
+      req.responderSession = session
+    }
+    return await handler(buildResponderClient(session), session)
+  } catch (error) {
+    if (error.response?.status === 401 && req.responderSession) {
+      try {
+        const session = await refreshResponderSessionToken(req.responderSession)
+        req.responderSession = session
+        return await handler(buildResponderClient(session), session)
+      } catch (retryError) {
+        return handleApiError(res, retryError)
+      }
+    }
+    return handleApiError(res, error)
+  }
+}
+
+const resolveResponderCredentials = (body = {}) => {
+  const env = readResponderEnvCredentials()
+  const clientId = body.clientId?.trim() || body.client_id?.trim() || env?.clientId
+  const clientSecret =
+    body.clientSecret?.trim() || body.client_secret?.trim() || env?.clientSecret
+  const userToken = body.userToken?.trim() || body.user_token?.trim() || env?.userToken
+  if (!clientId || !clientSecret || !userToken) return null
+  return { clientId, clientSecret, userToken }
+}
+
+app.get('/api/responder/auth/config', (_req, res) => {
+  const env = readResponderEnvCredentials()
+  return res.json({
+    envReady: Boolean(env),
+    hasClientCredentials: Boolean(
+      process.env.RESPONDER_CLIENT_ID?.trim() && process.env.RESPONDER_CLIENT_SECRET?.trim(),
+    ),
+    hasUserToken: Boolean(process.env.RESPONDER_USER_TOKEN?.trim()),
+  })
+})
+
+app.get('/api/responder/auth/status', (req, res) => {
+  const session = getResponderSession(req)
+  if (!session) {
+    return res.json({ loggedIn: false })
+  }
+  return res.json({
+    loggedIn: true,
+    username: session.username,
+    name: session.name,
+    accountId: session.accountId,
+    createdAt: session.createdAt,
+    expiresAt: session.expiresAt,
+  })
+})
+
+app.post('/api/responder/auth/login', async (req, res) => {
+  try {
+    const creds = resolveResponderCredentials(req.body)
+    if (!creds) {
+      return res.status(400).json({
+        message:
+          'חסרים client_id, client_secret או user_token. קבלו מפתחות מתמיכת רב מסר והעתיקו User Token מהגדרות > חיבורים חיצוניים.',
+      })
+    }
+
+    const oauth = await responderOAuthLogin(creds)
+    await saveResponderOAuthSnapshot(oauth.raw).catch(() => {})
+    const session = buildResponderSessionFromOAuth(creds, oauth)
+
+    res.cookie('responder_session_id', session.id, authCookieOptions)
+    return res.json({
+      loggedIn: true,
+      username: session.username,
+      name: session.name,
+      accountId: session.accountId,
+      expiresAt: session.expiresAt,
+    })
   } catch (error) {
     return handleApiError(res, error)
   }
+})
+
+app.post('/api/responder/auth/login-env', async (req, res) => {
+  try {
+    const env = readResponderEnvCredentials()
+    if (!env) {
+      return res.status(400).json({
+        message:
+          'הגדר ב-.env: RESPONDER_CLIENT_ID, RESPONDER_CLIENT_SECRET, RESPONDER_USER_TOKEN',
+      })
+    }
+
+    const oauth = await responderOAuthLogin(env)
+    await saveResponderOAuthSnapshot(oauth.raw).catch(() => {})
+    const session = buildResponderSessionFromOAuth(env, oauth)
+
+    res.cookie('responder_session_id', session.id, authCookieOptions)
+    return res.json({
+      loggedIn: true,
+      username: session.username,
+      name: session.name,
+      accountId: session.accountId,
+      fromEnv: true,
+      expiresAt: session.expiresAt,
+    })
+  } catch (error) {
+    return handleApiError(res, error)
+  }
+})
+
+app.post('/api/responder/auth/refresh', requireResponderSession, async (req, res) => {
+  try {
+    const session = await refreshResponderSessionToken(req.responderSession)
+    return res.json({
+      refreshed: true,
+      username: session.username,
+      expiresAt: session.expiresAt,
+    })
+  } catch (error) {
+    return handleApiError(res, error)
+  }
+})
+
+app.post('/api/responder/auth/logout', requireResponderSession, (req, res) => {
+  responderSessions.delete(req.responderSession.id)
+  res.clearCookie('responder_session_id')
+  return res.json({ loggedOut: true })
+})
+
+app.get('/api/responder/lists', requireResponderSession, async (req, res) => {
+  return withResponderSession(req, res, async (client) => {
+    const response = await client.get('/lists', { params: req.query })
+    return res.json(response.data)
+  })
+})
+
+app.get('/api/responder/subscribers/search', requireResponderSession, async (req, res) => {
+  return withResponderSession(req, res, async (client) => {
+    const response = await client.get('/subscribers/search', { params: req.query })
+    return res.json(response.data)
+  })
+})
+
+app.post('/api/responder/proxy', requireResponderSession, async (req, res) => {
+  return withResponderSession(req, res, async (client) => {
+    const { method = 'GET', path, query, body } = req.body
+    if (!path || !path.startsWith('/')) {
+      return res.status(400).json({ message: 'path is required and must start with /' })
+    }
+    const response = await client.request({
+      method,
+      url: path,
+      params: query,
+      data: body,
+    })
+    return res.json(response.data)
+  })
 })
 
 app.post('/api/youtube/extract-playlist', async (req, res) => {

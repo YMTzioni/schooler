@@ -1,5 +1,12 @@
 import { API_BASE } from '../config/api.js'
+import {
+  canYoutubeTranslateTo,
+  normalizeTrackLang,
+  pickBestSourceTrack,
+  pickYoutubeTranslationCode,
+} from '../../lib/captionTrackUtils.js'
 import { parseVtt } from './vtt.js'
+import { setCachedCaption, setVideoTrackMeta } from './captionCache.js'
 import { translateVttInBrowser, youtubeTranslationLooksApplied } from './clientTranslate.js'
 
 const parseApiResponse = async (response) => {
@@ -19,25 +26,6 @@ const parseApiResponse = async (response) => {
   }
 
   return data
-}
-
-const youtubeLangsMatch = (a, b) => {
-  const left = a === 'he' ? 'iw' : a
-  const right = b === 'he' ? 'iw' : b
-  return left === right
-}
-
-const pickTrack = (tracks, lang = 'auto') => {
-  if (!tracks?.length) return null
-  if (lang && lang !== 'auto') {
-    return tracks.find((track) => youtubeLangsMatch(track.lang, lang)) || null
-  }
-  return (
-    tracks.find((track) => youtubeLangsMatch(track.lang, 'iw')) ||
-    tracks.find((track) => youtubeLangsMatch(track.lang, 'he')) ||
-    tracks.find((track) => track.isAuto) ||
-    tracks[0]
-  )
 }
 
 export async function fetchCaptionTracks(videoId) {
@@ -70,33 +58,40 @@ export async function fetchVttFromTrackUrl(baseUrl, { tlang, fmt = 'vtt' } = {})
   return content
 }
 
-export async function fetchCaptionsViaBrowser(
-  videoId,
-  { lang = 'auto', tlang = 'none' } = {},
-) {
-  const trackInfo = await fetchCaptionTracks(videoId)
-  const track = pickTrack(trackInfo.tracks, lang)
-  if (!track?.baseUrl) {
-    throw new Error('לא נמצאו מסלולי כתוביות לסרטון זה')
+const cacheSourceAndMeta = (videoId, trackInfo, track, sourceVtt) => {
+  const sourceLang = normalizeTrackLang(track.lang)
+  setVideoTrackMeta(videoId, {
+    sourceLang,
+    sourceName: track.name || sourceLang,
+    tracks: trackInfo.tracks || [],
+    translationLanguages: trackInfo.translationLanguages || [],
+  })
+  setCachedCaption(videoId, 'none', {
+    content: sourceVtt,
+    translatedLocally: false,
+    sourceLang,
+    status: {
+      state: 'ready',
+      message: `שפת מקור: ${sourceLang}`,
+      delivery: 'browser',
+      sourceLang,
+    },
+  })
+  return sourceLang
+}
+
+const tryYoutubeTranslation = async (track, trackInfo, sourceVtt, targetLang) => {
+  if (!canYoutubeTranslateTo(trackInfo.translationLanguages, targetLang)) {
+    return null
   }
 
-  const sourceVtt = await fetchVttFromTrackUrl(track.baseUrl)
-  const wantsTranslation = tlang && tlang !== 'none'
-
-  if (!wantsTranslation) {
-    return {
-      content: sourceVtt,
-      translatedLocally: false,
-      status: {
-        state: 'ready',
-        message: 'כתוביות נטענו מהדפדפן',
-        delivery: 'browser',
-      },
-    }
-  }
+  const youtubeCode = pickYoutubeTranslationCode(trackInfo.translationLanguages, targetLang)
+  if (!youtubeCode) return null
 
   try {
-    const youtubeTranslated = await fetchVttFromTrackUrl(track.baseUrl, { tlang })
+    const youtubeTranslated = await fetchVttFromTrackUrl(track.baseUrl, {
+      tlang: youtubeCode,
+    })
     const sourceCues = parseVtt(sourceVtt)
     const translatedCues = parseVtt(youtubeTranslated)
     if (youtubeTranslationLooksApplied(sourceCues, translatedCues)) {
@@ -105,23 +100,64 @@ export async function fetchCaptionsViaBrowser(
         translatedLocally: false,
         status: {
           state: 'ready',
-          message: `תרגום YouTube ל${tlang}`,
+          message: `תרגום YouTube ל${targetLang}`,
           delivery: 'browser-youtube',
         },
       }
     }
   } catch {
-    // Fall back to browser Google Translate.
+    // Fall through to Google Translate.
   }
 
-  const localTranslation = await translateVttInBrowser(sourceVtt, track.lang, tlang)
+  return null
+}
+
+export async function fetchCaptionsViaBrowser(
+  videoId,
+  { lang = 'auto', tlang = 'none' } = {},
+) {
+  const trackInfo = await fetchCaptionTracks(videoId)
+  const track = pickBestSourceTrack(trackInfo.tracks, lang)
+  if (!track?.baseUrl) {
+    throw new Error('לא נמצאו מסלולי כתוביות לסרטון זה')
+  }
+
+  const wantsTranslation = tlang && tlang !== 'none'
+  const sourceVtt = await fetchVttFromTrackUrl(track.baseUrl)
+  const sourceLang = cacheSourceAndMeta(videoId, trackInfo, track, sourceVtt)
+
+  if (!wantsTranslation) {
+    return {
+      content: sourceVtt,
+      translatedLocally: false,
+      sourceLang,
+      status: {
+        state: 'ready',
+        message: `כתוביות נטענו (${sourceLang})`,
+        delivery: 'browser',
+        sourceLang,
+      },
+    }
+  }
+
+  const youtubeResult = await tryYoutubeTranslation(track, trackInfo, sourceVtt, tlang)
+  if (youtubeResult) {
+    return {
+      ...youtubeResult,
+      sourceLang,
+    }
+  }
+
+  const localTranslation = await translateVttInBrowser(sourceVtt, sourceLang, tlang)
   return {
     content: localTranslation.content,
     translatedLocally: localTranslation.translatedLocally,
+    sourceLang: localTranslation.detectedSourceLang || sourceLang,
     status: {
       state: 'ready',
-      message: `תרגום בדפדפן ל${tlang}`,
+      message: `תרגום בדפדפן ל${tlang} (מקור: ${localTranslation.detectedSourceLang || sourceLang})`,
       delivery: 'browser-translate',
+      sourceLang: localTranslation.detectedSourceLang || sourceLang,
     },
   }
 }

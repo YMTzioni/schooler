@@ -52,15 +52,17 @@ const translateBatchGoogle = async (texts, fromLang, toLang) => {
   return texts.map((text, index) => translated[index]?.[0] || text)
 }
 
-export async function translateVttInBrowser(vttContent, sourceLang, targetLang) {
-  if (shouldSkipTranslation(sourceLang, targetLang)) {
-    return { content: vttContent, translatedLocally: false }
-  }
+const translationLooksApplied = (sourceVtt, translatedVtt) => {
+  const sourceCues = parseVttCues(sourceVtt)
+  const translatedCues = parseVttCues(translatedVtt)
+  return youtubeTranslationLooksApplied(sourceCues, translatedCues)
+}
 
+const translateVttInternal = async (vttContent, sourceLang, targetLang) => {
   const from = toGoogleLang(sourceLang) || 'auto'
   const to = toGoogleLang(targetLang)
   if (!to) {
-    return { content: vttContent, translatedLocally: false }
+    return { content: vttContent, translatedLocally: false, detectedSourceLang: sourceLang }
   }
 
   const cues = parseVttCues(vttContent)
@@ -93,7 +95,34 @@ export async function translateVttInBrowser(vttContent, sourceLang, targetLang) 
   return {
     content: cuesToVtt(translatedCues),
     translatedLocally: true,
+    detectedSourceLang: sourceLang,
   }
+}
+
+export async function translateVttInBrowser(vttContent, sourceLang, targetLang) {
+  if (shouldSkipTranslation(sourceLang, targetLang)) {
+    return { content: vttContent, translatedLocally: false, detectedSourceLang: sourceLang }
+  }
+
+  const attempts = []
+  if (sourceLang && sourceLang !== 'auto') {
+    attempts.push(sourceLang)
+  }
+  attempts.push('auto')
+
+  let lastResult = null
+  for (const attemptLang of attempts) {
+    const result = await translateVttInternal(vttContent, attemptLang, targetLang)
+    lastResult = result
+    if (translationLooksApplied(vttContent, result.content)) {
+      return {
+        ...result,
+        detectedSourceLang: attemptLang === 'auto' ? sourceLang || 'auto' : attemptLang,
+      }
+    }
+  }
+
+  return lastResult || { content: vttContent, translatedLocally: false, detectedSourceLang: sourceLang }
 }
 
 export { youtubeTranslationLooksApplied }

@@ -3,8 +3,8 @@ import Plyr from 'plyr'
 import 'plyr/dist/plyr.css'
 import { getActiveCue, parseVtt } from '../utils/vtt.js'
 import { PLAYER_TRANSLATION_LANGUAGES } from '../constants/subtitleLanguages.js'
-import { prefetchCaptionsForVideo, readCachedCaption } from '../utils/captionPrefetch.js'
-import { getPrefetchPromise, setCachedCaption } from '../utils/captionCache.js'
+import { prepareCaptionsForVideo, readCachedCaption } from '../utils/captionPrefetch.js'
+import { getPrefetchPromise, setCachedCaption, getVideoTrackMeta } from '../utils/captionCache.js'
 import {
   buildErrorCaptionStatus,
   buildLoadingCaptionStatus,
@@ -365,6 +365,7 @@ function PlyrEmbed({
   const subtitlePropsRef = useRef({ targetLang, captionLang })
   const captionApiSyncTimerRef = useRef(null)
   const pendingNativeCaptionLangRef = useRef(null)
+  const detectedSourceLangRef = useRef(null)
   const applyPendingNativeCaptionsRef = useRef(async () => {})
   const playerTranslateLangRef = useRef(resolvePreferredTranslateLang(targetLang, captionLang))
   const [captionsOn, setCaptionsOn] = useState(showCaptions)
@@ -413,7 +414,7 @@ function PlyrEmbed({
       applyNativeCaptionFallback({
         player: playerRef.current,
         targetLang,
-        sourceLang,
+        sourceLang: detectedSourceLangRef.current || sourceLang,
         error,
         playerRef,
         nativeCaptionsRef,
@@ -610,18 +611,19 @@ function PlyrEmbed({
       return applyLoadedCaptions(cached, { cached: true })
     }
 
-    const inflightPrefetch = isCloudHostedApp() ? null : getPrefetchPromise(currentVideoId)
+    const inflightPrefetch = getPrefetchPromise(currentVideoId)
     if (inflightPrefetch && awaitPrefetch) {
       if (player) {
         updateSettingsValue(player, 'captions', 'מכין כתוביות…')
       }
-      emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות מהשרת…'))
+      emitCaptionStatus(buildLoadingCaptionStatus('מזהה שפת מקור ומכין כתוביות…'))
       try {
         const prefetchResult = await inflightPrefetch
         emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
         const prefetched = readCachedCaption(currentVideoId, playerTargetLang)
         if (prefetched?.content) {
           if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
+          if (prefetched.sourceLang) detectedSourceLangRef.current = prefetched.sourceLang
           return applyLoadedCaptions(prefetched, { cached: true })
         }
       } catch (error) {
@@ -634,6 +636,11 @@ function PlyrEmbed({
       }
     }
 
+    const trackMeta = getVideoTrackMeta(currentVideoId)
+    if (trackMeta?.sourceLang) {
+      detectedSourceLangRef.current = trackMeta.sourceLang
+    }
+
     if (player && needsTranslation) {
       updateSettingsValue(player, 'captions', 'מתרגם כתוביות…')
     }
@@ -642,18 +649,28 @@ function PlyrEmbed({
     )
 
     try {
+      const effectiveSourceLang =
+        sourceLang && sourceLang !== 'auto'
+          ? sourceLang
+          : detectedSourceLangRef.current || 'auto'
+
       const subtitle = await loadCaptionsFromApi({
         videoId: currentVideoId,
-        sourceLang,
+        sourceLang: effectiveSourceLang,
         targetLang: playerTargetLang,
       })
 
       if (videoIdRef.current !== currentVideoId || requestId !== captionRequestIdRef.current) return false
 
+      if (subtitle.sourceLang) {
+        detectedSourceLangRef.current = subtitle.sourceLang
+      }
+
       nativeCaptionsRef.current = false
       setCachedCaption(currentVideoId, playerTargetLang, {
         content: subtitle.content,
         translatedLocally: subtitle.translatedLocally,
+        sourceLang: subtitle.sourceLang || detectedSourceLangRef.current,
         status: subtitle.status,
       })
 
@@ -710,7 +727,8 @@ function PlyrEmbed({
     cuesRef.current = []
     translatedLocallyRef.current = false
     nativeCaptionsRef.current = false
-    emitCaptionStatus(buildLoadingCaptionStatus('מכין כתוביות…'))
+    detectedSourceLangRef.current = null
+    emitCaptionStatus(buildLoadingCaptionStatus('מזהה שפת מקור…'))
 
     translationOptionsRef.current = PLAYER_TRANSLATION_LANGUAGES
     refreshCaptionsSettingsMenu()
@@ -722,37 +740,47 @@ function PlyrEmbed({
         ? playerTranslateLangRef.current
         : captionLang && captionLang !== 'auto'
           ? captionLang
-          : 'he'
+          : targetLang && targetLang !== 'none'
+            ? targetLang
+            : 'he'
 
-    if (!isCloudHostedApp()) {
-      const prefetchPromise = prefetchCaptionsForVideo({
-        videoId,
-        sourceLang,
-        priorityLang,
+    const preparePromise = prepareCaptionsForVideo({
+      videoId,
+      sourceLang,
+      priorityLang,
+    })
+
+    preparePromise
+      .then((prefetchResult) => {
+        if (prefetchId !== prefetchRequestIdRef.current || videoIdRef.current !== videoId) return
+        if (prefetchResult?.sourceLang) {
+          detectedSourceLangRef.current = prefetchResult.sourceLang
+        } else {
+          const meta = getVideoTrackMeta(videoId)
+          if (meta?.sourceLang) detectedSourceLangRef.current = meta.sourceLang
+        }
+        emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
+        if (!showCaptions || !captionsOnRef.current) return
+        if (cuesRef.current.length) return
+        loadCaptionsRef.current?.(playerTranslateLangRef.current)
       })
-
-      prefetchPromise
-        .then((prefetchResult) => {
-          if (prefetchId !== prefetchRequestIdRef.current || videoIdRef.current !== videoId) return
-          emitCaptionStatus(buildPrefetchCaptionStatus(prefetchResult?.status))
-          if (!showCaptions || !captionsOnRef.current) return
-          if (cuesRef.current.length) return
-          loadCaptionsRef.current?.(playerTranslateLangRef.current)
-        })
-        .catch(async (error) => {
-          if (prefetchId !== prefetchRequestIdRef.current) return
-          const nativeReady = await switchNativeCaptions(playerTranslateLangRef.current, { error })
-          if (!nativeReady) {
-            emitCaptionStatus(buildErrorCaptionStatus(error.message))
-            console.warn('הכנת כתוביות:', error.message)
-          }
-        })
-    }
+      .catch(async (error) => {
+        if (prefetchId !== prefetchRequestIdRef.current) return
+        if (!showCaptions) {
+          emitCaptionStatus(buildErrorCaptionStatus(error.message))
+          return
+        }
+        const nativeReady = await switchNativeCaptions(playerTranslateLangRef.current, { error })
+        if (!nativeReady) {
+          emitCaptionStatus(buildErrorCaptionStatus(error.message))
+          console.warn('הכנת כתוביות:', error.message)
+        }
+      })
 
     if (showCaptions) {
       const runLoadCaptions = loadCaptionsRef.current
       if (!runLoadCaptions) return
-      runLoadCaptions().then((loaded) => {
+      runLoadCaptions(playerTranslateLangRef.current, { awaitPrefetch: true }).then((loaded) => {
         if (loaded) {
           captionsOnRef.current = true
           setCaptionsOn(true)
