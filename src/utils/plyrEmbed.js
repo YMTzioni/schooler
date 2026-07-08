@@ -60,9 +60,11 @@ export const buildIframeEmbedCode = (videoId, title = 'YouTube video', origin = 
   height="405"
   frameborder="0"
   loading="lazy"
-  referrerpolicy="strict-origin-when-cross-origin"
-  allow="autoplay; encrypted-media; picture-in-picture"
+  referrerpolicy="origin-when-cross-origin"
+  allow="autoplay *; fullscreen *; encrypted-media *; picture-in-picture *"
   allowfullscreen
+  webkitallowfullscreen
+  mozallowfullscreen
 ></iframe>`
 }
 
