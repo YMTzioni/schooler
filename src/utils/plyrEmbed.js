@@ -4,8 +4,6 @@ import {
   buildYouTubeShieldMarkup,
 } from '../../lib/youtubeEmbed.js'
 
-const SCHOOLER_ORIGIN = 'https://my.schooler.biz'
-
 const escapeHtml = (value) =>
   value
     .replace(/&/g, '&amp;')
@@ -13,10 +11,10 @@ const escapeHtml = (value) =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 
-export const buildPlyrEmbedUrl = (videoId, origin = SCHOOLER_ORIGIN) =>
+export const buildPlyrEmbedUrl = (videoId, origin = null) =>
   buildYouTubeEmbedUrl(videoId, origin)
 
-export const buildPlyrEmbedCode = (videoId, title, origin = SCHOOLER_ORIGIN) => {
+export const buildPlyrEmbedCode = (videoId, title, origin = null) => {
   const safeTitle = escapeHtml(title)
   const embedUrl = buildPlyrEmbedUrl(videoId, origin)
   const playerId = `plyr-${videoId}`
