@@ -288,6 +288,20 @@ pre {
   pointer-events: none;
 }
 
+.plyr-yt-shields::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 64px;
+  background: #000;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+  z-index: 40;
+}
+
 .plyr-yt-shield {
   position: absolute;
   pointer-events: auto;
@@ -343,11 +357,21 @@ pre {
   pointer-events: auto;
 }
 
+.plyr--yt-paused .plyr-yt-shields::after,
+.plyr--paused .plyr-yt-shields::after {
+  opacity: 1;
+}
+
 /* In fullscreen, leave the Plyr control bar clickable */
 .plyr--fullscreen .plyr-yt-shields,
 .plyr:fullscreen .plyr-yt-shields {
   bottom: 52px;
   z-index: 2;
+}
+
+.plyr--fullscreen .plyr-yt-shields::after,
+.plyr:fullscreen .plyr-yt-shields::after {
+  height: 56px;
 }
 
 .plyr--fullscreen .plyr-yt-shield--br-logo,
