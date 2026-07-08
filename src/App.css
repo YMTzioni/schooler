@@ -298,7 +298,7 @@ pre {
   background: rgba(255, 255, 255, 0.5);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  opacity: 1;
+  opacity: 0;
   transition: opacity 0.15s ease, height 0.15s ease;
   pointer-events: none;
   z-index: 40;
@@ -347,16 +347,27 @@ pre {
 
 /* Visual cover for YouTube watermark — only while paused */
 .plyr-yt-shield--logo-cover {
-  opacity: 1;
+  opacity: 0;
   background: rgba(255, 255, 255, 0.5);
   transition: opacity 0.15s ease;
   pointer-events: none;
 }
 
+.plyr--yt-paused .plyr-yt-shield--logo-cover,
+.plyr--paused .plyr-yt-shield--logo-cover {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.plyr--yt-paused .plyr-yt-shields::after,
+.plyr--paused .plyr-yt-shields::after {
+  opacity: 1;
+}
+
 /* In fullscreen, leave the Plyr control bar clickable */
 .plyr--fullscreen .plyr-yt-shields,
 .plyr:fullscreen .plyr-yt-shields {
-  bottom: 0;
+  bottom: 52px;
   z-index: 2;
 }
 
