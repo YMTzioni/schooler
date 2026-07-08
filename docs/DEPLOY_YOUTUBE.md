@@ -21,7 +21,7 @@
 | מפתח | ערך |
 |------|-----|
 | `NODE_ENV` | `production` |
-| `FRONTEND_ORIGIN` | `https://YOUR-SERVICE.onrender.com` (אחרי דיפלוי ראשון) |
+| `FRONTEND_ORIGIN` | `https://schooler-z7x3.onrender.com` |
 | `SUPADATA_API_KEY` | המפתח מ-Supadata |
 | `SUPADATA_FIRST` | `true` |
 | `USE_PUBPROXY` | `false` |
