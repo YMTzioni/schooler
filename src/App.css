@@ -367,7 +367,7 @@ pre {
 /* In fullscreen, leave the Plyr control bar clickable */
 .plyr--fullscreen .plyr-yt-shields,
 .plyr:fullscreen .plyr-yt-shields {
-  bottom: 52px;
+  bottom: 0;
   z-index: 2;
 }
 
