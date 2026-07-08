@@ -1018,7 +1018,7 @@ function PlyrEmbed({
 }
 
 export default function PlyrPlayer(props) {
-  const { onCaptionStatusChange, ...embedProps } = props
+  const { onCaptionStatusChange, showCaptionStatusBar = true, ...embedProps } = props
   const [captionStatus, setCaptionStatus] = useState(null)
 
   const handleCaptionStatus = useCallback(
@@ -1034,7 +1034,7 @@ export default function PlyrPlayer(props) {
       <div className="plyr-player-wrap">
         <PlyrEmbed key={embedProps.videoId} {...embedProps} onCaptionStatusChange={handleCaptionStatus} />
       </div>
-      <CaptionStatusBar status={captionStatus} />
+      {showCaptionStatusBar && <CaptionStatusBar status={captionStatus} />}
     </div>
   )
 }

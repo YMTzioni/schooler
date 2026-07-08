@@ -250,6 +250,7 @@ function App() {
               videoId={hostedPlayerVideoId}
               title={`Video ${hostedPlayerVideoId}`}
               autoPlay={hostedEmbedVideoId}
+              showCaptionStatusBar={!hostedEmbedVideoId}
               showCaptions={!hostedEmbedVideoId}
               captionLang={hostedEmbedVideoId ? 'none' : 'he'}
               sourceLang="auto"
