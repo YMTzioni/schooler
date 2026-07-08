@@ -364,6 +364,7 @@ function PlyrEmbed({
   const nativeCaptionsRef = useRef(false)
   const subtitlePropsRef = useRef({ targetLang, captionLang })
   const captionApiSyncTimerRef = useRef(null)
+  const pausedCoverHideTimerRef = useRef(null)
   const pendingNativeCaptionLangRef = useRef(null)
   const detectedSourceLangRef = useRef(null)
   const applyPendingNativeCaptionsRef = useRef(async () => {})
@@ -892,18 +893,34 @@ function PlyrEmbed({
     }
 
     const onPlaying = () => {
-      setPausedCover(false)
+      if (pausedCoverHideTimerRef.current) {
+        window.clearTimeout(pausedCoverHideTimerRef.current)
+        pausedCoverHideTimerRef.current = null
+      }
+      setPausedCover(true)
+      pausedCoverHideTimerRef.current = window.setTimeout(() => {
+        setPausedCover(false)
+        pausedCoverHideTimerRef.current = null
+      }, 6000)
       startCaptionSync()
       applyPendingNativeCaptionsRef.current?.()
       scheduleNativeCaptionSync()
     }
 
     const onPause = () => {
+      if (pausedCoverHideTimerRef.current) {
+        window.clearTimeout(pausedCoverHideTimerRef.current)
+        pausedCoverHideTimerRef.current = null
+      }
       setPausedCover(true)
       stopCaptionSync()
     }
 
     const onEnded = () => {
+      if (pausedCoverHideTimerRef.current) {
+        window.clearTimeout(pausedCoverHideTimerRef.current)
+        pausedCoverHideTimerRef.current = null
+      }
       setPausedCover(true)
       stopCaptionSync()
     }
@@ -923,6 +940,10 @@ function PlyrEmbed({
       if (captionApiSyncTimerRef.current) {
         window.clearTimeout(captionApiSyncTimerRef.current)
         captionApiSyncTimerRef.current = null
+      }
+      if (pausedCoverHideTimerRef.current) {
+        window.clearTimeout(pausedCoverHideTimerRef.current)
+        pausedCoverHideTimerRef.current = null
       }
       if (player.embed?.removeEventListener) {
         player.embed.removeEventListener('onApiChange', onApiChange)
