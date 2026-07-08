@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
-import { buildIframeEmbedCode, buildPlyrEmbedCode } from './utils/plyrEmbed.js'
+import {
+  buildHostedWatchUrl,
+  buildIframeEmbedCode,
+  buildPlyrEmbedCode,
+} from './utils/plyrEmbed.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
   SUBTITLE_SOURCE_LANGUAGES,
@@ -74,6 +78,12 @@ async function apiRequest(path, options = {}) {
 }
 
 function App() {
+  const hostedWatchVideoId =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/watch\/([a-zA-Z0-9_-]{11})\/?$/)?.[1] || null
+      : null
+  const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''
+
   const [playlistUrl, setPlaylistUrl] = useState('')
   const [playlistResult, setPlaylistResult] = useState(null)
   const [playlistLoading, setPlaylistLoading] = useState(false)
@@ -220,11 +230,35 @@ function App() {
       fileName: video.fileName,
       title: video.title,
       videoId: video.videoId,
-      plyrEmbedCode: buildPlyrEmbedCode(video.videoId, video.title),
-      iframeEmbedCode: buildIframeEmbedCode(video.videoId, video.title),
-      schoolerEmbedLink: video.schoolerEmbedLink,
+      iframeEmbedCode: buildIframeEmbedCode(video.videoId, video.title, appOrigin),
+      watchUrl: buildHostedWatchUrl(video.videoId, appOrigin),
     }))
     copyText(JSON.stringify(payload, null, 2), 'כל קודי Embed')
+  }
+
+  if (hostedWatchVideoId) {
+    return (
+      <main className="layout">
+        <section className="panel">
+          <h2>צפייה דרך Schooler Course Studio</h2>
+          <PlyrPlayer
+            videoId={hostedWatchVideoId}
+            title={`Video ${hostedWatchVideoId}`}
+            showCaptions
+            captionLang="he"
+            sourceLang="auto"
+            targetLang="he"
+            format="vtt"
+            onCaptionStatusChange={setLiveCaptionStatus}
+          />
+          {liveCaptionStatus?.message && (
+            <p className={`note caption-live-status caption-live-status--${liveCaptionStatus.state}`}>
+              {liveCaptionStatus.message}
+            </p>
+          )}
+        </section>
+      </main>
+    )
   }
 
   return (
@@ -418,7 +452,7 @@ function App() {
                         type="button"
                         onClick={() =>
                           copyText(
-                            buildIframeEmbedCode(activeEpisode.videoId, activeEpisode.title),
+                            buildIframeEmbedCode(activeEpisode.videoId, activeEpisode.title, appOrigin),
                             `קוד iframe לדף לימודים · פרק ${activeEpisode.index}`,
                           )
                         }
@@ -429,7 +463,7 @@ function App() {
                         type="button"
                         onClick={() =>
                           copyText(
-                            activeEpisode.schoolerEmbedLink,
+                            buildHostedWatchUrl(activeEpisode.videoId, appOrigin),
                             `קישור צפייה לפרק ${activeEpisode.index}`,
                           )
                         }
@@ -465,7 +499,7 @@ function App() {
                           type="button"
                           onClick={() =>
                             copyText(
-                              buildIframeEmbedCode(video.videoId, video.title),
+                              buildIframeEmbedCode(video.videoId, video.title, appOrigin),
                               `קוד iframe לדף לימודים · פרק ${video.index}`,
                             )
                           }
@@ -475,10 +509,13 @@ function App() {
                         <button
                           type="button"
                           onClick={() =>
-                            copyText(video.schoolerEmbedLink, `קישור embed לפרק ${video.index}`)
+                            copyText(
+                              buildHostedWatchUrl(video.videoId, appOrigin),
+                              `קישור צפייה לפרק ${video.index}`,
+                            )
                           }
                         >
-                          העתק קישור embed
+                          העתק קישור צפייה
                         </button>
                         <button
                           type="button"
