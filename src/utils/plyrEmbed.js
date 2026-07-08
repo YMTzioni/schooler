@@ -74,5 +74,5 @@ export const buildHostedWatchUrl = (videoId, origin = null) => {
 
 export const buildHostedEmbedUrl = (videoId, origin = null) => {
   const appOrigin = origin || (typeof window !== 'undefined' ? window.location.origin : '')
-  return `${appOrigin}/embed/${videoId}`
+  return `${appOrigin}/embed/${videoId}?native=1`
 }
