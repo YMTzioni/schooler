@@ -3,7 +3,6 @@ import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
 import {
   buildHostedEmbedUrl,
-  buildIframeEmbedCode,
 } from './utils/plyrEmbed.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
@@ -439,19 +438,19 @@ function App() {
                         type="button"
                         onClick={() =>
                           copyText(
-                            buildIframeEmbedCode(activeEpisode.videoId, activeEpisode.title, appOrigin),
-                            `קוד iframe לדף לימודים · פרק ${activeEpisode.index}`,
+                            buildHostedEmbedUrl(activeEpisode.videoId, appOrigin),
+                            `קישור הטמעה לדף לימודים · פרק ${activeEpisode.index}`,
                           )
                         }
                       >
-                        העתק קוד iframe לדף לימודים (פרק נוכחי)
+                        העתק קישור הטמעה לדף לימודים (פרק נוכחי)
                       </button>
                     </div>
                   </section>
                 )}
 
                 <p className="note">
-                  להדבקה בדף לימודים השתמש בקוד iframe לכל פרק (תואם רוב מערכות הלמידה).
+                  הדבק בשדה ההטמעה של Schooler את קישור ההטמעה (ולא קוד iframe מלא).
                 </p>
 
                 <ul className="episode-list">
