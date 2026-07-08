@@ -425,6 +425,17 @@ function App() {
                       >
                         העתק קוד iframe לדף לימודים (פרק נוכחי)
                       </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyText(
+                            activeEpisode.schoolerEmbedLink,
+                            `קישור צפייה לפרק ${activeEpisode.index}`,
+                          )
+                        }
+                      >
+                        העתק קישור צפייה (פרק נוכחי)
+                      </button>
                     </div>
                   </section>
                 )}
