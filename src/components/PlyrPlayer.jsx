@@ -885,10 +885,27 @@ function PlyrEmbed({
       player.embed.addEventListener('onApiChange', onApiChange)
     }
 
+    const setPausedCover = (paused) => {
+      const container = player.elements?.container
+      if (!container) return
+      container.classList.toggle('plyr--yt-paused', paused)
+    }
+
     const onPlaying = () => {
+      setPausedCover(false)
       startCaptionSync()
       applyPendingNativeCaptionsRef.current?.()
       scheduleNativeCaptionSync()
+    }
+
+    const onPause = () => {
+      setPausedCover(true)
+      stopCaptionSync()
+    }
+
+    const onEnded = () => {
+      setPausedCover(true)
+      stopCaptionSync()
     }
 
     const onTimeUpdate = () => syncCaptionOverlayRef.current()
@@ -897,8 +914,8 @@ function PlyrEmbed({
     player.on('ready', onReady)
     player.on('timeupdate', onTimeUpdate)
     player.on('playing', onPlaying)
-    player.on('pause', stopCaptionSync)
-    player.on('ended', stopCaptionSync)
+    player.on('pause', onPause)
+    player.on('ended', onEnded)
     player.on('seeked', onSeeked)
 
     return () => {
@@ -913,8 +930,8 @@ function PlyrEmbed({
       player.off('ready', onReady)
       player.off('timeupdate', onTimeUpdate)
       player.off('playing', onPlaying)
-      player.off('pause', stopCaptionSync)
-      player.off('ended', stopCaptionSync)
+      player.off('pause', onPause)
+      player.off('ended', onEnded)
       player.off('seeked', onSeeked)
       if (overlayRef.current) {
         overlayRef.current.remove()

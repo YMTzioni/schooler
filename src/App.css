@@ -318,8 +318,29 @@ pre {
 .plyr-yt-shield--br-logo {
   bottom: 0;
   right: 0;
-  width: 72px;
-  height: 40px;
+  width: 96px;
+  height: 48px;
+}
+
+.plyr-yt-shield--bl-logo {
+  bottom: 0;
+  left: 0;
+  width: 128px;
+  height: 52px;
+}
+
+/* Visual cover for YouTube watermark — only while paused */
+.plyr-yt-shield--logo-cover {
+  opacity: 0;
+  background: #000;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.plyr--yt-paused .plyr-yt-shield--logo-cover,
+.plyr--paused .plyr-yt-shield--logo-cover {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* In fullscreen, leave the Plyr control bar clickable */
@@ -332,8 +353,15 @@ pre {
 .plyr--fullscreen .plyr-yt-shield--br-logo,
 .plyr:fullscreen .plyr-yt-shield--br-logo {
   bottom: 0;
-  width: 72px;
-  height: 36px;
+  width: 88px;
+  height: 42px;
+}
+
+.plyr--fullscreen .plyr-yt-shield--bl-logo,
+.plyr:fullscreen .plyr-yt-shield--bl-logo {
+  bottom: 0;
+  width: 120px;
+  height: 48px;
 }
 
 .plyr--fullscreen .plyr-yt-shield--br-watch,
