@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
+import { buildYouTubeLmsEmbedUrl } from '../lib/youtubeEmbed.js'
 import {
   buildHostedEmbedUrl,
 } from './utils/plyrEmbed.js'
@@ -230,16 +231,29 @@ function App() {
       <main className={`layout ${hostedEmbedVideoId ? 'layout--embed' : ''}`}>
         <section className={hostedEmbedVideoId ? 'embed-player-shell' : 'panel'}>
           {!hostedEmbedVideoId && <h2>צפייה דרך Schooler Course Studio</h2>}
-          <PlyrPlayer
-            videoId={hostedPlayerVideoId}
-            title={`Video ${hostedPlayerVideoId}`}
-            showCaptions
-            captionLang="he"
-            sourceLang="auto"
-            targetLang="he"
-            format="vtt"
-            onCaptionStatusChange={setLiveCaptionStatus}
-          />
+          {hostedEmbedVideoId ? (
+            <div className="embed-player-frame-wrap">
+              <iframe
+                src={buildYouTubeLmsEmbedUrl(hostedPlayerVideoId)}
+                title={`Video ${hostedPlayerVideoId}`}
+                className="embed-player-frame"
+                allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                allowFullScreen
+                referrerPolicy="origin-when-cross-origin"
+              />
+            </div>
+          ) : (
+            <PlyrPlayer
+              videoId={hostedPlayerVideoId}
+              title={`Video ${hostedPlayerVideoId}`}
+              showCaptions
+              captionLang="he"
+              sourceLang="auto"
+              targetLang="he"
+              format="vtt"
+              onCaptionStatusChange={setLiveCaptionStatus}
+            />
+          )}
           {!hostedEmbedVideoId && liveCaptionStatus?.message && (
             <p className={`note caption-live-status caption-live-status--${liveCaptionStatus.state}`}>
               {liveCaptionStatus.message}
