@@ -412,11 +412,24 @@ function App() {
                       format={subtitleSettings.format}
                       onCaptionStatusChange={setLiveCaptionStatus}
                     />
+                    <div className="actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyText(
+                            buildPlyrEmbedCode(activeEpisode.videoId, activeEpisode.title),
+                            `קוד Embed לדף לימודים · פרק ${activeEpisode.index}`,
+                          )
+                        }
+                      >
+                        העתק קוד Embed לדף לימודים (פרק נוכחי)
+                      </button>
+                    </div>
                   </section>
                 )}
 
                 <p className="note">
-                  הנגן משתמש ב-Plyr עם youtube-nocookie. להדבקה ב-Schooler השתמש בקוד Plyr לכל פרק.
+                  הנגן משתמש ב-Plyr עם youtube-nocookie. להדבקה בדף לימודים השתמש בקוד Embed (Plyr) לכל פרק.
                 </p>
 
                 <ul className="episode-list">
@@ -441,11 +454,11 @@ function App() {
                           onClick={() =>
                             copyText(
                               buildPlyrEmbedCode(video.videoId, video.title),
-                              `קוד Plyr לפרק ${video.index}`,
+                              `קוד Embed לדף לימודים · פרק ${video.index}`,
                             )
                           }
                         >
-                          העתק קוד Plyr
+                          העתק קוד Embed לדף לימודים
                         </button>
                         <button
                           type="button"
