@@ -3,9 +3,7 @@ import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
 import {
   buildHostedEmbedUrl,
-  buildHostedWatchUrl,
   buildIframeEmbedCode,
-  buildPlyrEmbedCode,
 } from './utils/plyrEmbed.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
@@ -228,21 +226,6 @@ function App() {
     }
   }
 
-  const copyAllEmbeds = () => {
-    if (!playlistResult?.videos?.length) return
-    const payload = playlistResult.videos.map((video) => ({
-      index: video.index,
-      displayName: video.displayName,
-      fileName: video.fileName,
-      title: video.title,
-      videoId: video.videoId,
-      iframeEmbedCode: buildIframeEmbedCode(video.videoId, video.title, appOrigin),
-      hostedEmbedUrl: buildHostedEmbedUrl(video.videoId, appOrigin),
-      watchUrl: buildHostedWatchUrl(video.videoId, appOrigin),
-    }))
-    copyText(JSON.stringify(payload, null, 2), 'כל קודי Embed')
-  }
-
   if (hostedPlayerVideoId) {
     return (
       <main className={`layout ${hostedEmbedVideoId ? 'layout--embed' : ''}`}>
@@ -435,9 +418,6 @@ function App() {
                   <p>
                     נמצאו {playlistResult.total} פרקים בפלייליסט {playlistResult.playlistId}
                   </p>
-                  <button type="button" onClick={copyAllEmbeds}>
-                    העתק הכל כ-JSON
-                  </button>
                 </div>
 
                 {activeEpisode && (
@@ -466,17 +446,6 @@ function App() {
                       >
                         העתק קוד iframe לדף לימודים (פרק נוכחי)
                       </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          copyText(
-                            buildHostedEmbedUrl(activeEpisode.videoId, appOrigin),
-                            `קישור צפייה לפרק ${activeEpisode.index}`,
-                          )
-                        }
-                      >
-                        העתק קישור צפייה (פרק נוכחי)
-                      </button>
                     </div>
                   </section>
                 )}
@@ -502,28 +471,6 @@ function App() {
                         קובץ: {video.fileName}.{subtitleSettings.format}
                       </p>
                       <div className="actions">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            copyText(
-                              buildIframeEmbedCode(video.videoId, video.title, appOrigin),
-                              `קוד iframe לדף לימודים · פרק ${video.index}`,
-                            )
-                          }
-                        >
-                          העתק קוד iframe לדף לימודים
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            copyText(
-                              buildHostedEmbedUrl(video.videoId, appOrigin),
-                              `קישור צפייה לפרק ${video.index}`,
-                            )
-                          }
-                        >
-                          העתק קישור צפייה
-                        </button>
                         <button
                           type="button"
                           disabled={subtitleLoading}
