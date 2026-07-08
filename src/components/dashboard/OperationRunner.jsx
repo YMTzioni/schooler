@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { buildQuery, fillPath, formatJson, formatTime, parseJsonBody } from './operationUtils.js'
+import {
+  buildBodyFromSchemaFields,
+  buildBodyFieldDefs,
+  buildBodyFieldState,
+  buildBodyFromFields,
+  buildQuery,
+  buildSchemaBodyFieldState,
+  fillPath,
+  formatJson,
+  formatTime,
+  parseJsonBody,
+  validateSchemaBodyFields,
+  validateBodyFieldValues,
+} from './operationUtils.js'
 
 export default function OperationRunner({
   operation,
@@ -8,12 +21,32 @@ export default function OperationRunner({
   result,
   error,
   defaultPathValues = {},
+  lookupOptions = {},
 }) {
   const [pathValues, setPathValues] = useState({})
   const [queryValues, setQueryValues] = useState({})
   const [bodyText, setBodyText] = useState('')
+  const [bodyValues, setBodyValues] = useState({})
+  const [schemaBodyValues, setSchemaBodyValues] = useState({})
+  const [bodyFieldsError, setBodyFieldsError] = useState('')
   const [customMethod, setCustomMethod] = useState('GET')
   const [customPath, setCustomPath] = useState('/api/v1/courses')
+
+  const bodyFieldDefs = useMemo(
+    () => buildBodyFieldDefs(operation?.bodyTemplate),
+    [operation?.bodyTemplate],
+  )
+  const schemaBodyFields = operation?.bodyFields || []
+  const previewBody = useMemo(() => {
+    try {
+      if (schemaBodyFields.length > 0) {
+        return formatJson(buildBodyFromSchemaFields(schemaBodyFields, schemaBodyValues))
+      }
+      return formatJson(buildBodyFromFields(bodyFieldDefs, bodyValues))
+    } catch {
+      return 'JSON לא תקין באחד השדות'
+    }
+  }, [bodyFieldDefs, bodyValues, schemaBodyFields, schemaBodyValues])
 
   useEffect(() => {
     if (!operation) return
@@ -30,11 +63,14 @@ export default function OperationRunner({
     setQueryValues(nextQuery)
 
     setBodyText(operation.bodyTemplate ? formatJson(operation.bodyTemplate) : '')
+    setBodyValues(buildBodyFieldState(bodyFieldDefs))
+    setSchemaBodyValues(buildSchemaBodyFieldState(schemaBodyFields))
+    setBodyFieldsError('')
     if (operation.customProxy) {
       setCustomMethod(operation.method || 'GET')
       setCustomPath(operation.path || '/api/v1/courses')
     }
-  }, [operation, defaultPathValues])
+  }, [operation, defaultPathValues, bodyFieldDefs, schemaBodyFields])
 
   const needsBody = useMemo(
     () =>
@@ -51,7 +87,28 @@ export default function OperationRunner({
     const method = operation.customProxy ? customMethod : operation.method
     const path = operation.customProxy ? customPath : fillPath(operation.path, pathValues)
     const query = buildQuery(operation.queryFields, queryValues)
-    const body = needsBody ? parseJsonBody(bodyText) : undefined
+    let body
+    if (needsBody) {
+      if (schemaBodyFields.length > 0) {
+        const schemaErrors = validateSchemaBodyFields(schemaBodyFields, schemaBodyValues)
+        if (schemaErrors.length) {
+          setBodyFieldsError(schemaErrors.join(' · '))
+          return
+        }
+        setBodyFieldsError('')
+        body = buildBodyFromSchemaFields(schemaBodyFields, schemaBodyValues)
+      } else if (operation.bodyTemplate && !operation.customProxy && bodyFieldDefs.length > 0) {
+        const validationErrors = validateBodyFieldValues(bodyFieldDefs, bodyValues)
+        if (validationErrors.length) {
+          setBodyFieldsError(validationErrors.join(' · '))
+          return
+        }
+        setBodyFieldsError('')
+        body = buildBodyFromFields(bodyFieldDefs, bodyValues)
+      } else {
+        body = parseJsonBody(bodyText)
+      }
+    }
 
     await onExecute({ method, path, query, body })
   }
@@ -59,6 +116,8 @@ export default function OperationRunner({
   if (!operation) {
     return <p className="note">בחרו פעולה מהתפריט.</p>
   }
+
+  const getLookupItems = (fieldName) => lookupOptions[fieldName] || []
 
   return (
     <form className="op-runner" onSubmit={handleSubmit}>
@@ -101,14 +160,31 @@ export default function OperationRunner({
           {operation.pathFields.map((field) => (
             <label key={field.name}>
               {field.label}
-              <input
-                value={pathValues[field.name] || ''}
-                onChange={(e) =>
-                  setPathValues((prev) => ({ ...prev, [field.name]: e.target.value }))
-                }
-                required={field.required}
-                dir="ltr"
-              />
+              {getLookupItems(field.name).length > 0 ? (
+                <select
+                  value={pathValues[field.name] || ''}
+                  onChange={(e) =>
+                    setPathValues((prev) => ({ ...prev, [field.name]: e.target.value }))
+                  }
+                  required={field.required}
+                >
+                  <option value="">בחר...</option>
+                  {getLookupItems(field.name).map((item) => (
+                    <option key={`${field.name}-${item.value}`} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={pathValues[field.name] || ''}
+                  onChange={(e) =>
+                    setPathValues((prev) => ({ ...prev, [field.name]: e.target.value }))
+                  }
+                  required={field.required}
+                  dir="ltr"
+                />
+              )}
             </label>
           ))}
         </div>
@@ -119,38 +195,165 @@ export default function OperationRunner({
           {operation.queryFields.map((field) => (
             <label key={field.name}>
               {field.label}
-              <input
-                value={queryValues[field.name] || ''}
-                onChange={(e) =>
-                  setQueryValues((prev) => ({ ...prev, [field.name]: e.target.value }))
-                }
-                placeholder={field.placeholder}
-                dir="ltr"
-              />
+              {getLookupItems(field.name).length > 0 ? (
+                <select
+                  value={queryValues[field.name] || ''}
+                  onChange={(e) =>
+                    setQueryValues((prev) => ({ ...prev, [field.name]: e.target.value }))
+                  }
+                >
+                  <option value="">בחר...</option>
+                  {getLookupItems(field.name).map((item) => (
+                    <option key={`${field.name}-${item.value}`} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={queryValues[field.name] || ''}
+                  onChange={(e) =>
+                    setQueryValues((prev) => ({ ...prev, [field.name]: e.target.value }))
+                  }
+                  placeholder={field.placeholder}
+                  dir="ltr"
+                />
+              )}
             </label>
           ))}
         </div>
       )}
 
       {needsBody && (
-        <label>
-          גוף הבקשה (JSON)
-          <textarea
-            rows={12}
-            value={bodyText}
-            onChange={(e) => setBodyText(e.target.value)}
-            dir="ltr"
-            className="op-runner__body"
-          />
-        </label>
+        <>
+          {schemaBodyFields.length > 0 ? (
+            <div className="op-runner__grid">
+              {schemaBodyFields.map((field) => (
+                <label key={field.path}>
+                  {field.label}
+                  {field.type === 'boolean' ? (
+                    <select
+                      value={String(schemaBodyValues[field.path] ?? 'false')}
+                      onChange={(e) =>
+                        setSchemaBodyValues((prev) => ({ ...prev, [field.path]: e.target.value }))
+                      }
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : field.type === 'json' ? (
+                    <textarea
+                      rows={4}
+                      value={schemaBodyValues[field.path] || ''}
+                      onChange={(e) =>
+                        setSchemaBodyValues((prev) => ({ ...prev, [field.path]: e.target.value }))
+                      }
+                      placeholder={field.placeholder}
+                      dir="ltr"
+                    />
+                  ) : (
+                    <input
+                      type={field.type === 'number' ? 'number' : 'text'}
+                      value={schemaBodyValues[field.path] ?? ''}
+                      onChange={(e) =>
+                        setSchemaBodyValues((prev) => ({ ...prev, [field.path]: e.target.value }))
+                      }
+                      placeholder={field.placeholder}
+                      dir="ltr"
+                    />
+                  )}
+                </label>
+              ))}
+              <label className="op-runner__full">
+                תצוגת JSON סופי (לבדיקה)
+                <textarea rows={8} value={previewBody} readOnly dir="ltr" className="op-runner__body" />
+              </label>
+            </div>
+          ) : operation.bodyTemplate && !operation.customProxy && bodyFieldDefs.length > 0 ? (
+            <div className="op-runner__grid">
+              {bodyFieldDefs.map((field) => (
+                <label key={field.key}>
+                  {field.label}
+                  {field.type === 'boolean' ? (
+                    <select
+                      value={String(bodyValues[field.key] ?? 'false')}
+                      onChange={(e) =>
+                        setBodyValues((prev) => ({ ...prev, [field.key]: e.target.value }))
+                      }
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : field.type === 'json' ? (
+                    <textarea
+                      rows={4}
+                      value={bodyValues[field.key] || ''}
+                      onChange={(e) =>
+                        setBodyValues((prev) => ({ ...prev, [field.key]: e.target.value }))
+                      }
+                      dir="ltr"
+                    />
+                  ) : (
+                    <input
+                      type={field.type === 'number' ? 'number' : 'text'}
+                      value={bodyValues[field.key] ?? ''}
+                      onChange={(e) =>
+                        setBodyValues((prev) => ({ ...prev, [field.key]: e.target.value }))
+                      }
+                      placeholder={field.placeholder}
+                      dir="ltr"
+                    />
+                  )}
+                </label>
+              ))}
+              <label className="op-runner__full">
+                תצוגת JSON סופי (לבדיקה)
+                <textarea
+                  rows={8}
+                  value={previewBody}
+                  readOnly
+                  dir="ltr"
+                  className="op-runner__body"
+                />
+              </label>
+            </div>
+          ) : (
+            <label>
+              גוף הבקשה (JSON)
+              <textarea
+                rows={12}
+                value={bodyText}
+                onChange={(e) => setBodyText(e.target.value)}
+                dir="ltr"
+                className="op-runner__body"
+              />
+            </label>
+          )}
+        </>
       )}
 
       <div className="actions">
+        {operation.bodyTemplate && !operation.customProxy && bodyFieldDefs.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              if (schemaBodyFields.length > 0) {
+                setSchemaBodyValues(buildSchemaBodyFieldState(schemaBodyFields))
+              } else {
+                setBodyValues(buildBodyFieldState(bodyFieldDefs))
+              }
+              setBodyFieldsError('')
+            }}
+          >
+            איפוס ברירת מחדל
+          </button>
+        )}
         <button type="submit" disabled={loading}>
           {loading ? 'מריץ…' : 'הרץ פעולה'}
         </button>
       </div>
 
+      {bodyFieldsError && <p className="error">{bodyFieldsError}</p>}
       {error && <p className="error">{error}</p>}
 
       {result && (

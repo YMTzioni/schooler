@@ -13,7 +13,7 @@
 npm install
 ```
 
-2. הרצה משולבת (מומלץ):
+1. הרצה משולבת (מומלץ):
 
 ```bash
 npm start
@@ -35,6 +35,7 @@ npm run dev
 
 פרטי ההתחברות נשמרים בזיכרון של השרת המקומי בלבד (session memory).
 הם לא נכתבים לקובץ, ונמחקים לאחר ניתוק או עצירת השרת.
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.

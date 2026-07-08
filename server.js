@@ -1,4 +1,3 @@
-import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import axios from 'axios'
@@ -7,6 +6,7 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import dotenv from 'dotenv'
 import {
   parseVttCues,
   shouldSkipTranslation,
@@ -30,6 +30,10 @@ import {
 } from './lib/youtubeEmbed.js'
 import { pickBestSourceTrack } from './lib/captionTrackUtils.js'
 import {
+  fetchSupadataSubtitleSource,
+  isSupadataConfigured,
+} from './lib/supadataCaptions.js'
+import {
   buildSchoolerPasswordOAuthBody,
   buildSchoolerRefreshOAuthBody,
   parseSchoolerOAuthResponse,
@@ -45,16 +49,21 @@ import {
   RESPONDER_API_BASE,
 } from './lib/responderApi.js'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+dotenv.config({ path: path.join(__dirname, '.env') })
+
 const app = express()
 const PORT = process.env.PORT || 3030
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
 const BASE_URL = SCHOOLER_API_BASE
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distPath = path.join(__dirname, 'dist')
 const isProduction = process.env.NODE_ENV === 'production'
 const isVercel = Boolean(process.env.VERCEL)
 const isCloudHost = Boolean(process.env.RENDER || isVercel)
 const preferYouTubePubProxy = isCloudHost && process.env.USE_PUBPROXY !== 'false'
+const preferSupadataFirst =
+  isSupadataConfigured() &&
+  (isCloudHost || process.env.SUPADATA_FIRST === 'true' || process.env.SUPADATA_FIRST === '1')
 
 const isAllowedOrigin = (origin) => {
   if (!origin) return true
@@ -645,56 +654,94 @@ const prefetchSubtitleLanguages = async (
   }
 }
 
-const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' } = {}) =>
-  runWithYouTubeProxySession(async () => {
-    const fetchMeta = createSubtitleFetchMeta()
-    const trackInfo = await getCaptionTrackInfo(videoId, {
-      preferPubProxy: preferYouTubePubProxy,
-      meta: fetchMeta,
-    })
-    const tracks = trackInfo.tracks
-    const sourceTrack = pickBestSourceTrack(tracks, lang)
-    let content = ''
-    let sourceLang = sourceTrack?.lang || lang
-    let sourceName = sourceTrack?.name || sourceLang
-
-    if (sourceTrack?.baseUrl) {
-      content = await fetchTrackSubtitleContent(sourceTrack, {
-        fmt,
-        userAgent: trackInfo.clientUserAgent,
+const fetchSubtitleSourceViaLocal = async (videoId, { lang = 'auto', fmt = 'vtt' } = {}) =>
+  runWithYouTubeProxySession(
+    async () => {
+      const fetchMeta = createSubtitleFetchMeta()
+      const trackInfo = await getCaptionTrackInfo(videoId, {
         preferPubProxy: preferYouTubePubProxy,
         meta: fetchMeta,
       })
-    }
+      const tracks = trackInfo.tracks
+      const sourceTrack = pickBestSourceTrack(tracks, lang)
+      let content = ''
+      let sourceLang = sourceTrack?.lang || lang
+      let sourceName = sourceTrack?.name || sourceLang
 
-    if (!content || !String(content).trim()) {
-      try {
-        const segments = await fetchTranscriptSegments(videoId, { lang, meta: fetchMeta })
-        if (!segments?.length) {
+      if (sourceTrack?.baseUrl) {
+        content = await fetchTrackSubtitleContent(sourceTrack, {
+          fmt,
+          userAgent: trackInfo.clientUserAgent,
+          preferPubProxy: preferYouTubePubProxy,
+          meta: fetchMeta,
+        })
+      }
+
+      if (!content || !String(content).trim()) {
+        try {
+          const segments = await fetchTranscriptSegments(videoId, { lang, meta: fetchMeta })
+          if (!segments?.length) {
+            throw new Error('לא נמצאו כתוביות לסרטון זה')
+          }
+          sourceLang = segments[0]?.lang || sourceLang
+          content = transcriptToVtt(segments)
+        } catch (error) {
+          if (error instanceof YouTubeBlockedError) throw error
           throw new Error('לא נמצאו כתוביות לסרטון זה')
         }
-        sourceLang = segments[0]?.lang || sourceLang
-        content = transcriptToVtt(segments)
-      } catch (error) {
-        if (error instanceof YouTubeBlockedError) throw error
-        throw new Error('לא נמצאו כתוביות לסרטון זה')
+      }
+
+      if (!content || !String(content).trim()) {
+        throw new Error('כתוביות ריקות או לא זמינות לסרטון זה')
+      }
+
+      return {
+        content: String(content),
+        sourceLang,
+        sourceName,
+        tracks,
+        sourceTrack,
+        clientUserAgent: trackInfo.clientUserAgent,
+        fetchMeta,
+        provider: 'local',
+      }
+    },
+    { preferPubProxy: preferYouTubePubProxy },
+  )
+
+const fetchSubtitleSourceContent = async (videoId, { lang = 'auto', fmt = 'vtt' } = {}) => {
+  const fetchMeta = createSubtitleFetchMeta()
+
+  if (preferSupadataFirst) {
+    try {
+      const fromSupadata = await fetchSupadataSubtitleSource(videoId, { lang })
+      if (fromSupadata?.content) {
+        return {
+          ...fromSupadata,
+          fetchMeta,
+        }
+      }
+    } catch (error) {
+      // Cloud: fall through to local scrapers / pubproxy as secondary option.
+      if (!isCloudHost) throw error
+    }
+  }
+
+  try {
+    return await fetchSubtitleSourceViaLocal(videoId, { lang, fmt })
+  } catch (localError) {
+    if (isSupadataConfigured() && !preferSupadataFirst) {
+      const fromSupadata = await fetchSupadataSubtitleSource(videoId, { lang })
+      if (fromSupadata?.content) {
+        return {
+          ...fromSupadata,
+          fetchMeta,
+        }
       }
     }
-
-    if (!content || !String(content).trim()) {
-      throw new Error('כתוביות ריקות או לא זמינות לסרטון זה')
-    }
-
-    return {
-      content: String(content),
-      sourceLang,
-      sourceName,
-      tracks,
-      sourceTrack,
-      clientUserAgent: trackInfo.clientUserAgent,
-      fetchMeta,
-    }
-  }, { preferPubProxy: preferYouTubePubProxy })
+    throw localError
+  }
+}
 
 const fetchSubtitleContent = async (videoId, { lang = 'auto', tlang, fmt = 'vtt' } = {}) => {
   const source = await fetchSubtitleSourceContent(videoId, { lang, fmt: 'vtt' })
@@ -772,7 +819,20 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     service: 'schooler-local-bridge',
     version: '1.3.6',
-    features: ['youtube-playlist', 'youtube-subtitles', 'subtitle-status', 'subtitle-translate', 'schooler-api', 'responder-api-v2'],
+    features: [
+      'youtube-playlist',
+      'youtube-subtitles',
+      'subtitle-status',
+      'subtitle-translate',
+      'schooler-api',
+      'responder-api-v2',
+      ...(isSupadataConfigured() ? ['supadata-subtitles'] : []),
+    ],
+    subtitlesProvider: isSupadataConfigured()
+      ? preferSupadataFirst
+        ? 'supadata-first'
+        : 'local-then-supadata'
+      : 'local',
   })
 })
 

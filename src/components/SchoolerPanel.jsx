@@ -20,10 +20,15 @@ const loadSavedAuth = () => {
     const saved = localStorage.getItem(AUTH_STORAGE_KEY)
     return saved
       ? JSON.parse(saved)
-      : { userId: '', userSecret: '' }
+      : { clientId: '', clientSecret: '', userId: '', userSecret: '' }
   } catch {
-    return { userId: '', userSecret: '' }
+    return { clientId: '', clientSecret: '', userId: '', userSecret: '' }
   }
+}
+
+const formatExpiry = (expiresAt) => {
+  if (!expiresAt) return ''
+  return new Date(expiresAt).toLocaleString('he-IL')
 }
 
 function LessonRow({ lesson, onCopyEmbed }) {
@@ -230,24 +235,89 @@ export default function SchoolerPanel({ onCopy, playlistVideos = [] }) {
     return (
       <section className="panel schooler-panel">
         <h2>Schooler API</h2>
+        <details className="schooler-advanced" open>
+          <summary>תהליך התחברות</summary>
+          <ol className="note responder-steps">
+            <li>
+              <strong>User ID</strong> — אימייל החשבון ב-Schooler
+            </li>
+            <li>
+              <strong>User Secret</strong> — מפתח API (מ-Schooler / תמיכה)
+            </li>
+            <li>
+              <strong>Client ID + Secret</strong> — מתמיכת Schooler (
+              <a href="mailto:support@responder.co.il">support@responder.co.il</a>)
+              — לרוב נפרדים ממפתחות רב מסר
+            </li>
+            <li>
+              השרת שולח <code>POST api.schooler.biz/oauth/token</code> עם{' '}
+              <code>grant_type: password</code>
+            </li>
+            <li>
+              התגובה: <code>access_token</code>, <code>refresh_token</code>,{' '}
+              <code>expires_in</code> — בקשות: <code>Authorization: Bearer &lt;access_token&gt;</code>
+            </li>
+          </ol>
+        </details>
         <p className="note">
-          התחברות עם אימייל Schooler ומפתח API לפי{' '}
           <a href="https://app.swaggerhub.com/apis/Responder/SchoolerAPI/1.0.0" target="_blank" rel="noreferrer">
-            תיעוד Schooler API
+            תיעוד Swagger
           </a>
-          .
+          {' · '}
+          <a
+            href="https://support.responder.co.il/portal/he/kb/articles/api-%D7%A9%D7%9C-%D7%9E%D7%A2%D7%A8%D7%9B%D7%AA-schooler"
+            target="_blank"
+            rel="noreferrer"
+          >
+            מדריך Schooler API
+          </a>
         </p>
 
         {envConfig.envReady && (
           <div className="schooler-env-banner">
-            <p>משתני סביבה מוגדרים בשרת ({envConfig.userId})</p>
+            <p>כל משתני הסביבה מוגדרים בשרת ({envConfig.userId})</p>
             <button type="button" disabled={authLoading} onClick={handleEnvLogin}>
               התחבר מהשרת (.env)
             </button>
           </div>
         )}
 
+        {envConfig.hasClientCredentials && !envConfig.envReady && envConfig.hasUserCredentials && (
+          <p className="note">
+            Client ID/Secret מוגדרים בשרת — הזינו רק אימייל ומפתח משתמש.
+          </p>
+        )}
+
+        {envConfig.hasUserCredentials && !envConfig.hasClientCredentials && (
+          <p className="note warn">
+            חסרים Client ID/Secret — הוסיפו SCHOOLER_CLIENT_ID ו-SCHOOLER_CLIENT_SECRET ל-.env (מתמיכת Schooler).
+          </p>
+        )}
+
         <form onSubmit={handleLogin} className="grid schooler-login">
+          {!envConfig.hasClientCredentials && (
+            <>
+              <label>
+                Client ID
+                <input
+                  value={authForm.clientId}
+                  onChange={(e) => persistAuthForm({ ...authForm, clientId: e.target.value })}
+                  required
+                  autoComplete="off"
+                />
+              </label>
+              <label>
+                Client Secret
+                <input
+                  type="password"
+                  value={authForm.clientSecret}
+                  onChange={(e) => persistAuthForm({ ...authForm, clientSecret: e.target.value })}
+                  required
+                  autoComplete="off"
+                />
+              </label>
+            </>
+          )}
           <label>
             אימייל (User ID)
             <input
@@ -285,7 +355,12 @@ export default function SchoolerPanel({ onCopy, playlistVideos = [] }) {
           ניתוק
         </button>
       </div>
-      <p className="note ok">מחובר כ־{authStatus.userId}</p>
+      <p className="note ok">
+        מחובר כ־{authStatus.userId}
+        {authStatus.expiresAt ? ` · תוקף עד ${formatExpiry(authStatus.expiresAt)}` : ''}
+        {authStatus.tokenType ? ` · ${authStatus.tokenType}` : ''}
+      </p>
+      <p className="note">Bearer token נשמר בשרת · תגובת OAuth אחרונה ב־<code>.schooler-oauth.json</code></p>
 
       <div className="actions">
         <button type="button" disabled={coursesLoading} onClick={loadCourses}>
@@ -296,8 +371,9 @@ export default function SchoolerPanel({ onCopy, playlistVideos = [] }) {
           onClick={async () => {
             setApiLoading(true)
             try {
-              await refreshSchoolerToken()
-              setApiOutput({ action: 'refresh', data: { refreshed: true } })
+              const data = await refreshSchoolerToken()
+              setApiOutput({ action: 'refresh', data })
+              await refreshStatus()
             } catch (error) {
               setApiError(error.message)
             } finally {

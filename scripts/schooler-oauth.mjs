@@ -5,10 +5,10 @@
  *
  * שימוש: node scripts/schooler-oauth.mjs
  */
-import 'dotenv/config'
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import dotenv from 'dotenv'
 import {
   buildSchoolerPasswordOAuthBody,
   parseSchoolerOAuthResponse,
@@ -18,6 +18,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
+dotenv.config({ path: path.join(root, '.env') })
 
 const creds = readSchoolerEnvCredentials()
 if (!creds) {

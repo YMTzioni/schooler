@@ -1,20 +1,25 @@
 services:
   - type: web
-    name: schooler
+    name: schooler-youtube
     runtime: node
-    plan: free
+    plan: starter
+    region: frankfurt
     buildCommand: npm install --include=dev && npm run build
-    startCommand: node server.js
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
-        value: 22
-      - key: USE_PUBPROXY
-        value: true
-      - key: PUBPROXY_MAX_ATTEMPTS
-        value: 8
-      - key: PROXY_PARALLEL_BATCH
-        value: 4
-      - key: YOUTUBE_PROXY_URL
+        value: "22"
+      # Set FRONTEND_ORIGIN to your Render URL after first deploy, e.g.
+      # https://schooler-youtube.onrender.com
+      - key: FRONTEND_ORIGIN
         sync: false
+      - key: SUPADATA_API_KEY
+        sync: false
+      # Prefer Supadata on cloud; keep optional pubproxy as fallback
+      - key: USE_PUBPROXY
+        value: "false"
+      - key: SUPADATA_FIRST
+        value: "true"

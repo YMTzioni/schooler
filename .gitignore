@@ -3,6 +3,8 @@ dist
 .env
 .env.*
 !.env.example
+.responder-oauth.json
+.schooler-oauth.json
 .DS_Store
 *.log
 .cursor

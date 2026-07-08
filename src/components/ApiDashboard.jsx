@@ -7,6 +7,7 @@ import {
   getSchoolerAuthStatus,
   getSchoolerCourseLessons,
   listSchoolerCourses,
+  listSchoolerSchools,
   loginSchooler,
   loginSchoolerFromEnv,
   logoutSchooler,
@@ -41,15 +42,11 @@ function AuthCard({
   title,
   status,
   config,
-  form,
-  onFormChange,
-  onLogin,
   onEnvLogin,
   onLogout,
   onRefresh,
   loading,
   error,
-  fields,
 }) {
   if (status.loading) return <p className="note">טוען {title}…</p>
 
@@ -65,35 +62,14 @@ function AuthCard({
             </p>
           </div>
         )}
-        {config.envReady && (
-          <button type="button" disabled={loading} onClick={onEnvLogin}>
-            התחבר מהשרת (.env)
-          </button>
+        <button type="button" disabled={loading || !config.envReady} onClick={onEnvLogin}>
+          {loading ? 'מתחבר…' : 'חבר אותי אוטומטית'}
+        </button>
+        {!config.envReady && (
+          <p className="note warn">
+            חסרים פרטי התחברות בשרת (.env). עדכן את הערכים הנדרשים ואז לחץ שוב.
+          </p>
         )}
-        <form
-          className="grid dash-auth-form"
-          onSubmit={(e) => {
-            e.preventDefault()
-            onLogin()
-          }}
-        >
-          {fields.map((field) => (
-            <label key={field.name}>
-              {field.label}
-              <input
-                type={field.type || 'text'}
-                value={form[field.name] || ''}
-                onChange={(e) => onFormChange({ ...form, [field.name]: e.target.value })}
-                required={field.required !== false}
-                autoComplete="off"
-                dir={field.ltr ? 'ltr' : undefined}
-              />
-            </label>
-          ))}
-          <button type="submit" disabled={loading}>
-            {loading ? 'מתחבר…' : 'התחבר'}
-          </button>
-        </form>
         {error && <p className="error">{error}</p>}
       </div>
     )
@@ -215,6 +191,13 @@ export default function ApiDashboard({ playlistVideos = [] }) {
   )
   const [schoolerAuthLoading, setSchoolerAuthLoading] = useState(false)
   const [schoolerAuthError, setSchoolerAuthError] = useState('')
+  const [schoolerEnvAutoTried, setSchoolerEnvAutoTried] = useState(false)
+  const [schoolerLookups, setSchoolerLookups] = useState({
+    school_id: [],
+    course_id: [],
+    id: [],
+    student_id: [],
+  })
 
   const [responderStatus, setResponderStatus] = useState({ loading: true, loggedIn: false })
   const [responderConfig, setResponderConfig] = useState({})
@@ -223,6 +206,10 @@ export default function ApiDashboard({ playlistVideos = [] }) {
   )
   const [responderAuthLoading, setResponderAuthLoading] = useState(false)
   const [responderAuthError, setResponderAuthError] = useState('')
+  const [responderEnvAutoTried, setResponderEnvAutoTried] = useState(false)
+  const [responderLookups, setResponderLookups] = useState({
+    listid: [],
+  })
 
   const [selectedOpId, setSelectedOpId] = useState(() => pickInitialOp(SCHOOLER_OPERATION_GROUPS)?.id)
   const [opLoading, setOpLoading] = useState(false)
@@ -232,6 +219,14 @@ export default function ApiDashboard({ playlistVideos = [] }) {
 
   const groups = mainTab === 'schooler' ? SCHOOLER_OPERATION_GROUPS : RESPONDER_OPERATION_GROUPS
   const selectedOp = findOpById(groups, selectedOpId) || pickInitialOp(groups)
+  const defaultPathValues = useMemo(
+    () => ({
+      course_id: pickedCourseId,
+      id: pickedCourseId,
+      school_id: pickedCourseId,
+    }),
+    [pickedCourseId],
+  )
 
   const refreshSchooler = useCallback(async () => {
     try {
@@ -270,32 +265,67 @@ export default function ApiDashboard({ playlistVideos = [] }) {
   }, [])
 
   useEffect(() => {
-    Promise.all([
-      getSchoolerAuthConfig().then(setSchoolerConfig).catch(() => {}),
-      getResponderAuthConfig().then(setResponderConfig).catch(() => {}),
-    ]).finally(() => {
+    const loadAuthConfig = () =>
+      Promise.all([
+        getSchoolerAuthConfig().then(setSchoolerConfig).catch(() => {}),
+        getResponderAuthConfig().then(setResponderConfig).catch(() => {}),
+      ])
+
+    loadAuthConfig().finally(() => {
       refreshSchooler()
       refreshResponder()
     })
+
+    const intervalId = setInterval(() => {
+      loadAuthConfig()
+    }, 15000)
+
+    return () => clearInterval(intervalId)
   }, [refreshSchooler, refreshResponder])
 
   useEffect(() => {
-    if (!responderConfig.envReady || responderStatus.loggedIn || responderAuthLoading) return
+    if (
+      !responderConfig.envReady ||
+      responderStatus.loggedIn ||
+      responderAuthLoading ||
+      responderEnvAutoTried
+    )
+      return
     setResponderAuthLoading(true)
+    setResponderEnvAutoTried(true)
     loginResponderFromEnv()
       .then(() => refreshResponder())
       .catch(() => {})
       .finally(() => setResponderAuthLoading(false))
-  }, [responderConfig.envReady, responderStatus.loggedIn, responderAuthLoading, refreshResponder])
+  }, [
+    responderConfig.envReady,
+    responderStatus.loggedIn,
+    responderAuthLoading,
+    responderEnvAutoTried,
+    refreshResponder,
+  ])
 
   useEffect(() => {
-    if (!schoolerConfig.envReady || schoolerStatus.loggedIn || schoolerAuthLoading) return
+    if (
+      !schoolerConfig.envReady ||
+      schoolerStatus.loggedIn ||
+      schoolerAuthLoading ||
+      schoolerEnvAutoTried
+    )
+      return
     setSchoolerAuthLoading(true)
+    setSchoolerEnvAutoTried(true)
     loginSchoolerFromEnv()
       .then(() => refreshSchooler())
       .catch((error) => setSchoolerAuthError(error.message))
       .finally(() => setSchoolerAuthLoading(false))
-  }, [schoolerConfig.envReady, schoolerStatus.loggedIn, schoolerAuthLoading, refreshSchooler])
+  }, [
+    schoolerConfig.envReady,
+    schoolerStatus.loggedIn,
+    schoolerAuthLoading,
+    schoolerEnvAutoTried,
+    refreshSchooler,
+  ])
 
   useEffect(() => {
     if (!schoolerConfig.userId || schoolerForm.userId) return
@@ -348,32 +378,108 @@ export default function ApiDashboard({ playlistVideos = [] }) {
     }
   }
 
-  const schoolerFields = [
-    ...(!schoolerConfig.hasClientCredentials
-      ? [
-          { name: 'clientId', label: 'Client ID (Schooler API)', ltr: true },
-          { name: 'clientSecret', label: 'Client Secret (Schooler API)', type: 'password', ltr: true },
-        ]
-      : []),
-    ...(!schoolerConfig.hasUserCredentials
-      ? [
-          { name: 'userId', label: 'אימייל (User ID)', ltr: true },
-          { name: 'userSecret', label: 'מפתח API (User Secret)', type: 'password', ltr: true },
-        ]
-      : []),
-  ]
-
-  const responderFields = [
-    ...(responderConfig.hasClientCredentials
-      ? []
-      : [
-          { name: 'clientId', label: 'Client ID', ltr: true },
-          { name: 'clientSecret', label: 'Client Secret', type: 'password', ltr: true },
-        ]),
-    { name: 'userToken', label: 'User Token', type: 'password', ltr: true },
-  ]
-
   const connected = mainTab === 'schooler' ? schoolerStatus.loggedIn : responderStatus.loggedIn
+  const activeLookups = mainTab === 'schooler' ? schoolerLookups : responderLookups
+
+  useEffect(() => {
+    if (!schoolerStatus.loggedIn) {
+      setSchoolerLookups({ school_id: [], course_id: [], id: [], student_id: [] })
+      return
+    }
+
+    const loadLookups = async () => {
+      try {
+        const [coursesData, schoolsData] = await Promise.all([
+          listSchoolerCourses({ per_page: 100 }).catch(() => null),
+          listSchoolerSchools({ per_page: 100 }).catch(() => null),
+        ])
+
+        const courses = coursesData?.data || []
+        const schools = schoolsData?.data || []
+
+        const schoolItems = schools
+          .map((school) => {
+            const id = String(school.id ?? school.school_id ?? '')
+            const name = school.school_name || school.name || `בית ספר ${id}`
+            if (!id) return null
+            return { value: id, label: `${name} (${id})` }
+          })
+          .filter(Boolean)
+
+        const courseItems = courses
+          .map((course) => {
+            const id = String(course.id ?? course.course_id ?? '')
+            const name = course.course_name || course.name || `קורס ${id}`
+            if (!id) return null
+            return { value: id, label: `${name} (${id})` }
+          })
+          .filter(Boolean)
+
+        const studentMap = new Map()
+        const firstSchoolId = schoolItems[0]?.value
+        if (firstSchoolId) {
+          const studentsResp = await proxySchoolerRequest({
+            method: 'GET',
+            path: `/api/v1/schools/${firstSchoolId}/students`,
+            query: { per_page: 100 },
+          }).catch(() => null)
+          const students = studentsResp?.data || studentsResp?.students || studentsResp || []
+          if (Array.isArray(students)) {
+            students.forEach((student) => {
+              const id = String(student.student_id ?? student.id ?? '')
+              if (!id || studentMap.has(id)) return
+              const name = student.student_name || student.name || student.email || `סטודנט ${id}`
+              studentMap.set(id, { value: id, label: `${name} (${id})` })
+            })
+          }
+        }
+
+        setSchoolerLookups({
+          school_id: schoolItems,
+          id: [...courseItems, ...schoolItems],
+          course_id: courseItems,
+          student_id: [...studentMap.values()],
+        })
+      } catch {
+        setSchoolerLookups({ school_id: [], course_id: [], id: [], student_id: [] })
+      }
+    }
+
+    loadLookups()
+  }, [schoolerStatus.loggedIn])
+
+  useEffect(() => {
+    if (!responderStatus.loggedIn) {
+      setResponderLookups({ listid: [] })
+      return
+    }
+
+    const loadResponderLookups = async () => {
+      try {
+        const listsData = await proxyResponderRequest({
+          method: 'GET',
+          path: '/lists',
+          query: { per_page: 100 },
+        })
+        const rawLists = listsData?.lists || listsData?.data || listsData || []
+        const listItems = Array.isArray(rawLists)
+          ? rawLists
+              .map((list) => {
+                const id = String(list.listid ?? list.id ?? '')
+                if (!id) return null
+                const name = list.description || list.name || `רשימה ${id}`
+                return { value: id, label: `${name} (${id})` }
+              })
+              .filter(Boolean)
+          : []
+        setResponderLookups({ listid: listItems })
+      } catch {
+        setResponderLookups({ listid: [] })
+      }
+    }
+
+    loadResponderLookups()
+  }, [responderStatus.loggedIn])
 
   return (
     <div className="api-dashboard">
@@ -407,28 +513,11 @@ export default function ApiDashboard({ playlistVideos = [] }) {
           title="Schooler API"
           status={schoolerStatus}
           config={schoolerConfig}
-          form={schoolerForm}
-          onFormChange={(next) => {
-            setSchoolerForm(next)
-            localStorage.setItem(SCHOOLER_AUTH_KEY, JSON.stringify(next))
-          }}
           loading={schoolerAuthLoading}
           error={schoolerAuthError}
-          fields={schoolerFields}
-          onLogin={async () => {
-            setSchoolerAuthLoading(true)
-            setSchoolerAuthError('')
-            try {
-              await loginSchooler(schoolerForm)
-              await refreshSchooler()
-            } catch (e) {
-              setSchoolerAuthError(e.message)
-            } finally {
-              setSchoolerAuthLoading(false)
-            }
-          }}
           onEnvLogin={async () => {
             setSchoolerAuthLoading(true)
+            setSchoolerAuthError('')
             try {
               await loginSchoolerFromEnv()
               await refreshSchooler()
@@ -451,28 +540,11 @@ export default function ApiDashboard({ playlistVideos = [] }) {
           title="רב מסר API V2"
           status={responderStatus}
           config={responderConfig}
-          form={responderForm}
-          onFormChange={(next) => {
-            setResponderForm(next)
-            localStorage.setItem(RESPONDER_AUTH_KEY, JSON.stringify(next))
-          }}
           loading={responderAuthLoading}
           error={responderAuthError}
-          fields={responderFields}
-          onLogin={async () => {
-            setResponderAuthLoading(true)
-            setResponderAuthError('')
-            try {
-              await loginResponder(responderForm)
-              await refreshResponder()
-            } catch (e) {
-              setResponderAuthError(e.message)
-            } finally {
-              setResponderAuthLoading(false)
-            }
-          }}
           onEnvLogin={async () => {
             setResponderAuthLoading(true)
+            setResponderAuthError('')
             try {
               await loginResponderFromEnv()
               await refreshResponder()
@@ -533,11 +605,8 @@ export default function ApiDashboard({ playlistVideos = [] }) {
               loading={opLoading}
               result={opResult}
               error={opError}
-              defaultPathValues={{
-                course_id: pickedCourseId,
-                id: pickedCourseId,
-                school_id: pickedCourseId,
-              }}
+              defaultPathValues={defaultPathValues}
+              lookupOptions={activeLookups}
             />
             {mainTab === 'schooler' && schoolerStatus.loggedIn && (
               <SchoolerExplorer playlistVideos={playlistVideos} onPickCourse={setPickedCourseId} />

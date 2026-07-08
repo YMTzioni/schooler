@@ -120,8 +120,40 @@ export const SCHOOLER_OPERATION_GROUPS = [
         method: 'POST',
         path: '/api/v1/schools/{school_id}/enroll_students',
         pathFields: [{ name: 'school_id', label: 'מזהה בית ספר', required: true }],
+        bodyFields: [
+          {
+            path: 'students_data[0].name',
+            label: 'שם מלא',
+            type: 'text',
+            required: true,
+            placeholder: 'ישראל ישראלי',
+            defaultValue: '',
+          },
+          {
+            path: 'students_data[0].email',
+            label: 'אימייל',
+            type: 'email',
+            required: true,
+            placeholder: 'student@example.com',
+            defaultValue: '',
+          },
+          {
+            path: 'students_data[0].student_phone',
+            label: 'טלפון',
+            type: 'phone',
+            placeholder: '0500000000',
+            defaultValue: '',
+          },
+          {
+            path: 'students_data[0].course_ids',
+            label: 'מזהי קורסים (JSON Array)',
+            type: 'json',
+            placeholder: '[123,456]',
+            defaultValue: [0],
+          },
+        ],
         bodyTemplate: {
-          students: [
+          students_data: [
             {
               name: 'שם תלמיד',
               email: 'student@example.com',
