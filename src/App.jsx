@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
-import { buildYouTubeLmsEmbedUrl } from '../lib/youtubeEmbed.js'
 import {
   buildHostedEmbedUrl,
 } from './utils/plyrEmbed.js'
@@ -85,6 +84,10 @@ function App() {
     typeof window !== 'undefined'
       ? window.location.pathname.match(/^\/embed\/([a-zA-Z0-9_-]{11})\/?$/)?.[1] || null
       : null
+  const forceNativeEmbed =
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('native') === '1'
+      : false
   const hostedPlayerVideoId = hostedEmbedVideoId || hostedWatchVideoId
   const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''
 
@@ -231,10 +234,10 @@ function App() {
       <main className={`layout ${hostedEmbedVideoId ? 'layout--embed' : ''}`}>
         <section className={hostedEmbedVideoId ? 'embed-player-shell' : 'panel'}>
           {!hostedEmbedVideoId && <h2>צפייה דרך Schooler Course Studio</h2>}
-          {hostedEmbedVideoId ? (
+          {hostedEmbedVideoId && forceNativeEmbed ? (
             <div className="embed-player-frame-wrap">
               <iframe
-                src={buildYouTubeLmsEmbedUrl(hostedPlayerVideoId)}
+                src={`https://www.youtube-nocookie.com/embed/${hostedPlayerVideoId}?rel=0&modestbranding=1&iv_load_policy=3&playsinline=1&autoplay=0&fs=1&controls=1&disablekb=0&cc_load_policy=1&enablejsapi=0`}
                 title={`Video ${hostedPlayerVideoId}`}
                 className="embed-player-frame"
                 allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
