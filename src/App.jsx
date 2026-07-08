@@ -249,10 +249,10 @@ function App() {
             <PlyrPlayer
               videoId={hostedPlayerVideoId}
               title={`Video ${hostedPlayerVideoId}`}
-              showCaptions
-              captionLang="he"
+              showCaptions={!hostedEmbedVideoId}
+              captionLang={hostedEmbedVideoId ? 'none' : 'he'}
               sourceLang="auto"
-              targetLang="he"
+              targetLang={hostedEmbedVideoId ? 'none' : 'he'}
               format="vtt"
               onCaptionStatusChange={setLiveCaptionStatus}
             />
