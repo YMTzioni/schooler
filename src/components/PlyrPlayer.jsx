@@ -353,6 +353,7 @@ function PlyrEmbed({
   videoId,
   title,
   episodeIndex,
+  autoPlay = false,
   showCaptions,
   captionLang,
   sourceLang,
@@ -875,6 +876,13 @@ function PlyrEmbed({
       ensureOverlay()
       refreshCaptionsSettingsMenuRef.current()
       window.setTimeout(() => setupYouTubeQualityMenu(player), 300)
+      if (autoPlay) {
+        // Autoplay in embeds is usually blocked unless muted.
+        player.muted = true
+        window.setTimeout(() => {
+          player.play().catch(() => {})
+        }, 120)
+      }
     }
 
     const scheduleNativeCaptionSync = () => {
@@ -973,7 +981,7 @@ function PlyrEmbed({
       player.destroy()
       playerRef.current = null
     }
-  }, [playerId, videoId])
+  }, [playerId, videoId, autoPlay])
 
   useEffect(() => {
     refreshCaptionsSettingsMenu()

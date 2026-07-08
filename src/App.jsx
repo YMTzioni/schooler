@@ -249,6 +249,7 @@ function App() {
             <PlyrPlayer
               videoId={hostedPlayerVideoId}
               title={`Video ${hostedPlayerVideoId}`}
+              autoPlay={hostedEmbedVideoId}
               showCaptions={!hostedEmbedVideoId}
               captionLang={hostedEmbedVideoId ? 'none' : 'he'}
               sourceLang="auto"
@@ -443,6 +444,7 @@ function App() {
                       videoId={activeEpisode.videoId}
                       title={activeEpisode.title}
                       episodeIndex={activeEpisode.index}
+              autoPlay={false}
                       showCaptions={subtitleSettings.showInPlayer}
                       captionLang={subtitleSettings.playerLang}
                       sourceLang={subtitleSettings.sourceLang}
