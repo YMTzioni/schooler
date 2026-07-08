@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
-import { buildPlyrEmbedCode } from './utils/plyrEmbed.js'
+import { buildIframeEmbedCode, buildPlyrEmbedCode } from './utils/plyrEmbed.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
   SUBTITLE_SOURCE_LANGUAGES,
@@ -221,9 +221,10 @@ function App() {
       title: video.title,
       videoId: video.videoId,
       plyrEmbedCode: buildPlyrEmbedCode(video.videoId, video.title),
+      iframeEmbedCode: buildIframeEmbedCode(video.videoId, video.title),
       schoolerEmbedLink: video.schoolerEmbedLink,
     }))
-    copyText(JSON.stringify(payload, null, 2), 'כל קודי Plyr')
+    copyText(JSON.stringify(payload, null, 2), 'כל קודי Embed')
   }
 
   return (
@@ -417,19 +418,19 @@ function App() {
                         type="button"
                         onClick={() =>
                           copyText(
-                            buildPlyrEmbedCode(activeEpisode.videoId, activeEpisode.title),
-                            `קוד Embed לדף לימודים · פרק ${activeEpisode.index}`,
+                            buildIframeEmbedCode(activeEpisode.videoId, activeEpisode.title),
+                            `קוד iframe לדף לימודים · פרק ${activeEpisode.index}`,
                           )
                         }
                       >
-                        העתק קוד Embed לדף לימודים (פרק נוכחי)
+                        העתק קוד iframe לדף לימודים (פרק נוכחי)
                       </button>
                     </div>
                   </section>
                 )}
 
                 <p className="note">
-                  הנגן משתמש ב-Plyr עם youtube-nocookie. להדבקה בדף לימודים השתמש בקוד Embed (Plyr) לכל פרק.
+                  להדבקה בדף לימודים השתמש בקוד iframe לכל פרק (תואם רוב מערכות הלמידה).
                 </p>
 
                 <ul className="episode-list">
@@ -453,12 +454,12 @@ function App() {
                           type="button"
                           onClick={() =>
                             copyText(
-                              buildPlyrEmbedCode(video.videoId, video.title),
-                              `קוד Embed לדף לימודים · פרק ${video.index}`,
+                              buildIframeEmbedCode(video.videoId, video.title),
+                              `קוד iframe לדף לימודים · פרק ${video.index}`,
                             )
                           }
                         >
-                          העתק קוד Embed לדף לימודים
+                          העתק קוד iframe לדף לימודים
                         </button>
                         <button
                           type="button"

@@ -48,3 +48,19 @@ export const buildPlyrEmbedCode = (videoId, title, origin = null) => {
   });
 </script>`
 }
+
+export const buildIframeEmbedCode = (videoId, title = 'YouTube video', origin = null) => {
+  const safeTitle = escapeHtml(title)
+  const embedUrl = buildPlyrEmbedUrl(videoId, origin)
+  return `<iframe
+  src="${embedUrl}"
+  title="${safeTitle}"
+  width="100%"
+  height="405"
+  frameborder="0"
+  loading="lazy"
+  referrerpolicy="strict-origin-when-cross-origin"
+  allow="autoplay; encrypted-media; picture-in-picture"
+  allowfullscreen
+></iframe>`
+}
