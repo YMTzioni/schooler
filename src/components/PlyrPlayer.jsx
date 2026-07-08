@@ -39,12 +39,23 @@ function resolvePreferredTranslateLang(targetLang, captionLang) {
   return 'none'
 }
 
-const buildPlyrOptions = () => ({
-  captions: { active: true, update: false },
-  youtube: {
-    ...YOUTUBE_PLYR_OPTIONS,
-    origin: window.location.origin,
-  },
+const resolveEmbedOrigin = () => {
+  if (typeof window === 'undefined') return undefined
+  const origin = String(window.location?.origin || '').trim()
+  // In sandboxed iframes origin can become "null" and breaks YouTube JS API.
+  if (!origin || origin === 'null') return undefined
+  if (!origin.startsWith('http://') && !origin.startsWith('https://')) return undefined
+  return origin
+}
+
+const buildPlyrOptions = () => {
+  const ytOrigin = resolveEmbedOrigin()
+  return {
+    captions: { active: true, update: false },
+    youtube: {
+      ...YOUTUBE_PLYR_OPTIONS,
+      ...(ytOrigin ? { origin: ytOrigin } : {}),
+    },
   controls: [
     'play-large',
     'play',
@@ -71,8 +82,9 @@ const buildPlyrOptions = () => ({
   },
   hideControls: false,
   resetOnEnd: true,
-  clickToPlay: true,
-})
+    clickToPlay: true,
+  }
+}
 
 function updateSettingsValue(player, type, value) {
   const button = player.elements.settings?.buttons?.[type]
