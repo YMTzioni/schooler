@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
 import {
+  buildHostedEmbedUrl,
   buildHostedWatchUrl,
   buildIframeEmbedCode,
   buildPlyrEmbedCode,
@@ -82,6 +83,11 @@ function App() {
     typeof window !== 'undefined'
       ? window.location.pathname.match(/^\/watch\/([a-zA-Z0-9_-]{11})\/?$/)?.[1] || null
       : null
+  const hostedEmbedVideoId =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/embed\/([a-zA-Z0-9_-]{11})\/?$/)?.[1] || null
+      : null
+  const hostedPlayerVideoId = hostedEmbedVideoId || hostedWatchVideoId
   const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''
 
   const [playlistUrl, setPlaylistUrl] = useState('')
@@ -231,19 +237,20 @@ function App() {
       title: video.title,
       videoId: video.videoId,
       iframeEmbedCode: buildIframeEmbedCode(video.videoId, video.title, appOrigin),
+      hostedEmbedUrl: buildHostedEmbedUrl(video.videoId, appOrigin),
       watchUrl: buildHostedWatchUrl(video.videoId, appOrigin),
     }))
     copyText(JSON.stringify(payload, null, 2), 'כל קודי Embed')
   }
 
-  if (hostedWatchVideoId) {
+  if (hostedPlayerVideoId) {
     return (
-      <main className="layout">
-        <section className="panel">
-          <h2>צפייה דרך Schooler Course Studio</h2>
+      <main className={`layout ${hostedEmbedVideoId ? 'layout--embed' : ''}`}>
+        <section className={hostedEmbedVideoId ? 'embed-player-shell' : 'panel'}>
+          {!hostedEmbedVideoId && <h2>צפייה דרך Schooler Course Studio</h2>}
           <PlyrPlayer
-            videoId={hostedWatchVideoId}
-            title={`Video ${hostedWatchVideoId}`}
+            videoId={hostedPlayerVideoId}
+            title={`Video ${hostedPlayerVideoId}`}
             showCaptions
             captionLang="he"
             sourceLang="auto"
@@ -251,7 +258,7 @@ function App() {
             format="vtt"
             onCaptionStatusChange={setLiveCaptionStatus}
           />
-          {liveCaptionStatus?.message && (
+          {!hostedEmbedVideoId && liveCaptionStatus?.message && (
             <p className={`note caption-live-status caption-live-status--${liveCaptionStatus.state}`}>
               {liveCaptionStatus.message}
             </p>
@@ -463,7 +470,7 @@ function App() {
                         type="button"
                         onClick={() =>
                           copyText(
-                            buildHostedWatchUrl(activeEpisode.videoId, appOrigin),
+                            buildHostedEmbedUrl(activeEpisode.videoId, appOrigin),
                             `קישור צפייה לפרק ${activeEpisode.index}`,
                           )
                         }
@@ -510,7 +517,7 @@ function App() {
                           type="button"
                           onClick={() =>
                             copyText(
-                              buildHostedWatchUrl(video.videoId, appOrigin),
+                              buildHostedEmbedUrl(video.videoId, appOrigin),
                               `קישור צפייה לפרק ${video.index}`,
                             )
                           }

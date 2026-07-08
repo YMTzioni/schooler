@@ -50,11 +50,10 @@ export const buildPlyrEmbedCode = (videoId, title, origin = null) => {
 }
 
 export const buildIframeEmbedCode = (videoId, title = 'YouTube video', origin = null) => {
-  const appOrigin = origin || (typeof window !== 'undefined' ? window.location.origin : '')
-  const watchUrl = `${appOrigin}/watch/${videoId}`
+  const embedUrl = buildHostedEmbedUrl(videoId, origin)
   const safeTitle = escapeHtml(title)
   return `<iframe
-  src="${watchUrl}"
+  src="${embedUrl}"
   title="${safeTitle}"
   width="100%"
   height="405"
@@ -71,4 +70,9 @@ export const buildIframeEmbedCode = (videoId, title = 'YouTube video', origin = 
 export const buildHostedWatchUrl = (videoId, origin = null) => {
   const appOrigin = origin || (typeof window !== 'undefined' ? window.location.origin : '')
   return `${appOrigin}/watch/${videoId}`
+}
+
+export const buildHostedEmbedUrl = (videoId, origin = null) => {
+  const appOrigin = origin || (typeof window !== 'undefined' ? window.location.origin : '')
+  return `${appOrigin}/embed/${videoId}`
 }
