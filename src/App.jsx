@@ -7,6 +7,8 @@ import {
 import {
   buildSchoolerImportFileName,
   buildSchoolerImportPayload,
+  countBundleLessons,
+  normalizeBundleChapters,
   resolveYoutubeLessonTitle,
   sortLessonsByAscendingNumber,
 } from './utils/courseExport.js'
@@ -112,10 +114,12 @@ function App() {
   const [liveCaptionStatus, setLiveCaptionStatus] = useState(null)
   const [courseLibrary, setCourseLibrary] = useState([])
   const [courseNameInput, setCourseNameInput] = useState('')
+  const [chapterNameInput, setChapterNameInput] = useState('')
   const [activeCourseId, setActiveCourseId] = useState(null)
 
   const activeEpisode = playlistResult?.videos?.[activeEpisodeIndex] ?? null
   const activeCourse = courseLibrary.find((course) => course.id === activeCourseId) || null
+  const activeCourseChapters = activeCourse ? normalizeBundleChapters(activeCourse) : []
 
   useEffect(() => {
     setLiveCaptionStatus(null)
@@ -326,60 +330,117 @@ function App() {
     }
   }
 
-  const savePlaylistAsCourse = async () => {
+  const persistCourse = async (nextCourse) => {
+    const data = await apiRequest('/library/courses', {
+      method: 'POST',
+      body: JSON.stringify(nextCourse),
+    })
+    const savedCourse = data.course
+    setCourseLibrary((current) => {
+      const exists = current.some((course) => course.id === savedCourse.id)
+      if (exists) return current.map((course) => (course.id === savedCourse.id ? savedCourse : course))
+      return [savedCourse, ...current]
+    })
+    setActiveCourseId(savedCourse.id)
+    return savedCourse
+  }
+
+  /** Save extracted playlist as a chapter (optionally create a new course bundle). */
+  const savePlaylistAsChapter = async ({ asNewBundle }) => {
     if (!playlistResult?.videos?.length) return
-    const normalizedName =
-      courseNameInput.trim() || playlistResult.title || `קורס ${playlistResult.playlistId || ''}`.trim()
-    const courseId = playlistResult.playlistId || `manual-${Date.now()}`
-    const nextCourse = {
-      id: courseId,
-      name: normalizedName || 'קורס חדש',
+
+    const chapterName =
+      chapterNameInput.trim() ||
+      playlistResult.title ||
+      `פרק ${playlistResult.playlistId || ''}`.trim() ||
+      'פרק חדש'
+    const videos = await refreshVideosTitles(playlistResult.videos)
+    const chapter = {
+      id: playlistResult.playlistId || `chapter-${Date.now()}`,
+      name: chapterName,
       playlistId: playlistResult.playlistId || null,
-      total: playlistResult.videos.length,
-      videos: await refreshVideosTitles(playlistResult.videos),
+      total: videos.length,
+      videos,
     }
+
     try {
-      const data = await apiRequest('/library/courses', {
-        method: 'POST',
-        body: JSON.stringify(nextCourse),
-      })
-      const savedCourse = data.course
-      setCourseLibrary((current) => {
-        const exists = current.some((course) => course.id === savedCourse.id)
-        if (exists) return current.map((course) => (course.id === savedCourse.id ? savedCourse : course))
-        return [savedCourse, ...current]
-      })
-      setActiveCourseId(courseId)
-      setCourseNameInput('')
-      setCopiedText('הקורס נשמר בשרת בהצלחה')
-      setTimeout(() => setCopiedText(''), 2000)
+      let nextCourse
+      if (asNewBundle || !activeCourse) {
+        const bundleName = courseNameInput.trim() || chapterName
+        nextCourse = {
+          id: `bundle-${Date.now()}`,
+          name: bundleName,
+          playlistId: chapter.playlistId,
+          total: videos.length,
+          videos,
+          chapters: [chapter],
+        }
+      } else {
+        const existingChapters = normalizeBundleChapters(activeCourse)
+        const samePlaylistIndex = existingChapters.findIndex(
+          (item) => item.playlistId && chapter.playlistId && item.playlistId === chapter.playlistId,
+        )
+        const chapters =
+          samePlaylistIndex >= 0
+            ? existingChapters.map((item, index) => (index === samePlaylistIndex ? chapter : item))
+            : [...existingChapters, chapter]
+        const flatVideos = chapters.flatMap((item) => item.videos || [])
+        nextCourse = {
+          ...activeCourse,
+          name: courseNameInput.trim() || activeCourse.name,
+          playlistId: chapters[0]?.playlistId || activeCourse.playlistId || null,
+          chapters,
+          videos: flatVideos,
+          total: flatVideos.length,
+        }
+      }
+
+      await persistCourse(nextCourse)
+      setChapterNameInput('')
+      if (asNewBundle || !activeCourse) setCourseNameInput('')
+      setCopiedText(
+        asNewBundle || !activeCourse
+          ? `נוצר קורס עם הפרק "${chapterName}"`
+          : `הפרק "${chapterName}" נוסף לקורס`,
+      )
+      setTimeout(() => setCopiedText(''), 2500)
     } catch (error) {
       setSubtitleStatus(error.message)
     }
   }
 
-  const loadCourseIntoPlayer = async (course) => {
+  const loadCourseIntoPlayer = async (course, chapter = null) => {
     try {
-      const videos = await refreshVideosTitles(course.videos || [])
+      const chapters = normalizeBundleChapters(course)
+      const sourceChapter = chapter || chapters[0] || null
+      const sourceVideos = sourceChapter?.videos || course.videos || []
+      const videos = await refreshVideosTitles(sourceVideos)
       setPlaylistResult({
-        playlistId: course.playlistId || course.id,
+        playlistId: sourceChapter?.playlistId || course.playlistId || course.id,
         total: videos.length,
         videos,
-        title: course.name,
+        title: sourceChapter?.name || course.name,
       })
       setActiveEpisodeIndex(0)
       setActiveCourseId(course.id)
+      if (sourceChapter?.name) setChapterNameInput(sourceChapter.name)
+      if (course.name) setCourseNameInput(course.name)
 
-      const titlesChanged = videos.some((video, index) => video.title !== course.videos?.[index]?.title)
+      const refreshedChapters = chapters.map((item) =>
+        item.id === sourceChapter?.id ? { ...item, videos, total: videos.length } : item,
+      )
+      const titlesChanged = videos.some(
+        (video, index) => video.title !== sourceVideos?.[index]?.title,
+      )
       if (titlesChanged) {
-        const nextCourse = { ...course, videos, total: videos.length }
-        await apiRequest('/library/courses', {
-          method: 'POST',
-          body: JSON.stringify(nextCourse),
-        })
-        setCourseLibrary((current) =>
-          current.map((item) => (item.id === course.id ? { ...item, ...nextCourse } : item)),
-        )
+        const flatVideos = refreshedChapters.flatMap((item) => item.videos || [])
+        const nextCourse = {
+          ...course,
+          chapters: refreshedChapters,
+          videos: flatVideos,
+          total: flatVideos.length,
+        }
+        await persistCourse(nextCourse)
       }
     } catch (error) {
       setSubtitleStatus(error.message)
@@ -395,19 +456,54 @@ function App() {
     }
   }
 
-  const exportCourseForExtension = async (course) => {
-    if (!course?.videos?.length) return
+  const removeChapterFromCourse = async (course, chapterId) => {
+    const chapters = normalizeBundleChapters(course).filter((chapter) => chapter.id !== chapterId)
+    if (!chapters.length) {
+      await deleteCourse(course.id)
+      return
+    }
+    const flatVideos = chapters.flatMap((chapter) => chapter.videos || [])
     try {
-      const videos = await refreshVideosTitles(course.videos)
-      const payload = buildSchoolerImportPayload({ ...course, videos }, appOrigin)
+      await persistCourse({
+        ...course,
+        chapters,
+        videos: flatVideos,
+        total: flatVideos.length,
+        playlistId: chapters[0]?.playlistId || null,
+      })
+      setCopiedText('הפרק הוסר מהקורס')
+      setTimeout(() => setCopiedText(''), 2000)
+    } catch (error) {
+      setSubtitleStatus(error.message)
+    }
+  }
+
+  const exportCourseForExtension = async (course) => {
+    const chapters = normalizeBundleChapters(course)
+    if (!chapters.length) return
+    try {
+      const refreshedChapters = []
+      for (const chapter of chapters) {
+        const videos = await refreshVideosTitles(chapter.videos || [])
+        refreshedChapters.push({ ...chapter, videos, total: videos.length })
+      }
+      const flatVideos = refreshedChapters.flatMap((chapter) => chapter.videos || [])
+      const nextCourse = {
+        ...course,
+        chapters: refreshedChapters,
+        videos: flatVideos,
+        total: flatVideos.length,
+      }
+      const payload = buildSchoolerImportPayload(nextCourse, appOrigin)
       downloadTextFile(JSON.stringify(payload, null, 2), buildSchoolerImportFileName(course))
-      setCopiedText(`יוצא JSON לתוסף · ${payload.lessons.length} שיעורים`)
+      setCopiedText(
+        `יוצא JSON לתוסף · ${payload.chapters.length} פרקים · ${payload.lessons.length} שיעורים`,
+      )
       setTimeout(() => setCopiedText(''), 2500)
       setCourseLibrary((current) =>
-        current.map((item) =>
-          item.id === course.id ? { ...item, videos, total: videos.length } : item,
-        ),
+        current.map((item) => (item.id === course.id ? { ...item, ...nextCourse } : item)),
       )
+      await persistCourse(nextCourse)
     } catch (error) {
       setSubtitleStatus(error.message)
     }
@@ -616,21 +712,59 @@ function App() {
             {copiedText && <p className="ok">{copiedText}</p>}
             {playlistResult?.videos?.length ? (
               <section className="settings-box grid course-save-box">
-                <h3>שמירה כקורס קבוע במערכת</h3>
+                <h3>שמירה כפרק בקורס</h3>
+                <p className="note">
+                  כל פלייליסט = פרק אחד. אפשר לבנות קורס עם כמה פרקים ואז לייצא JSON אחד לתוסף.
+                </p>
                 <label>
-                  שם קורס
+                  שם הפרק
                   <input
-                    placeholder={playlistResult.title || 'לדוגמה: קורס פייתון למתחילים'}
+                    placeholder={playlistResult.title || 'לדוגמה: מבוא לבינה מלאכותית'}
+                    value={chapterNameInput}
+                    onChange={(e) => setChapterNameInput(e.target.value)}
+                  />
+                </label>
+                <label>
+                  שם הקורס (חבילת פרקים)
+                  <input
+                    placeholder={
+                      activeCourse?.name || 'לדוגמה: קורס בינה מלאכותית מלא'
+                    }
                     value={courseNameInput}
                     onChange={(e) => setCourseNameInput(e.target.value)}
                   />
                 </label>
+                {courseLibrary.length ? (
+                  <label>
+                    קורס קיים להוספת הפרק
+                    <select
+                      value={activeCourseId || ''}
+                      onChange={(e) => setActiveCourseId(e.target.value || null)}
+                    >
+                      <option value="">— בחר קורס —</option>
+                      {courseLibrary.map((course) => (
+                        <option key={course.id} value={course.id}>
+                          {course.name} ({normalizeBundleChapters(course).length} פרקים)
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <div className="actions">
-                  <button type="button" onClick={savePlaylistAsCourse}>
-                    שמור/עדכן קורס מספריית הפלייליסט
+                  <button type="button" onClick={() => savePlaylistAsChapter({ asNewBundle: true })}>
+                    צור קורס חדש עם הפרק הזה
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeCourse}
+                    onClick={() => savePlaylistAsChapter({ asNewBundle: false })}
+                  >
+                    הוסף פרק לקורס הנבחר
                   </button>
                 </div>
-                <p className="note">אותו Playlist נשמר עם מזהה קבוע, כך שקישורי ההטמעה של הפרקים נשארים קבועים.</p>
+                <p className="note">
+                  אם אותו פלייליסט כבר קיים בקורס — הפרק יעודכן במקום ליצור כפילות.
+                </p>
               </section>
             ) : null}
             {playlistResult?.videos?.length ? (
@@ -722,68 +856,105 @@ function App() {
           <section className="settings-box grid course-library-box">
             <h3>ספריית קורסים במערכת שלנו</h3>
             {!courseLibrary.length ? (
-              <p className="note">עדיין אין קורסים שמורים. חלץ פלייליסט ושמור אותו כדי לייצר ספרייה קבועה.</p>
+              <p className="note">
+                עדיין אין קורסים שמורים. חלץ פלייליסט, תן שם לפרק ושמור אותו כקורס חדש או הוסף לקורס קיים.
+              </p>
             ) : (
               <>
                 <div className="course-library-list">
-                  {courseLibrary.map((course) => (
-                    <div
-                      key={course.id}
-                      className={`course-library-item ${course.id === activeCourseId ? 'active' : ''}`}
-                    >
-                      <div>
-                        <strong>{course.name}</strong>
-                        <p className="note">
-                          {course.videos?.length || 0} פרקים · מזהה קורס: {course.id}
-                        </p>
+                  {courseLibrary.map((course) => {
+                    const chapters = normalizeBundleChapters(course)
+                    const lessonCount = countBundleLessons(course)
+                    return (
+                      <div
+                        key={course.id}
+                        className={`course-library-item ${course.id === activeCourseId ? 'active' : ''}`}
+                      >
+                        <div>
+                          <strong>{course.name}</strong>
+                          <p className="note">
+                            {chapters.length} פרקים · {lessonCount} שיעורים · מזהה: {course.id}
+                          </p>
+                        </div>
+                        <div className="actions">
+                          <button type="button" onClick={() => loadCourseIntoPlayer(course)}>
+                            טען פרק ראשון לנגן
+                          </button>
+                          <button type="button" onClick={() => setActiveCourseId(course.id)}>
+                            נהל פרקים
+                          </button>
+                          <button type="button" onClick={() => exportCourseForExtension(course)}>
+                            ייצא לתוסף Schooler
+                          </button>
+                          <button type="button" onClick={() => deleteCourse(course.id)}>
+                            מחק קורס
+                          </button>
+                        </div>
                       </div>
-                      <div className="actions">
-                        <button type="button" onClick={() => loadCourseIntoPlayer(course)}>
-                          טען לנגן
-                        </button>
-                        <button type="button" onClick={() => setActiveCourseId(course.id)}>
-                          נהל קישורים
-                        </button>
-                        <button type="button" onClick={() => exportCourseForExtension(course)}>
-                          ייצא לתוסף Schooler
-                        </button>
-                        <button type="button" onClick={() => deleteCourse(course.id)}>
-                          מחק קורס
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
 
-                {activeCourse?.videos?.length ? (
+                {activeCourseChapters.length ? (
                   <div className="course-links-grid">
-                    <h4>קישורים קבועים · {activeCourse.name}</h4>
+                    <h4>פרקים בקורס · {activeCourse.name}</h4>
                     <p className="note">
-                      הורד JSON → פתח את דף עריכת הקורס ב-Schooler → טען את הקובץ בתוסף והרץ ייבוא.
+                      ייצוא JSON אחד כולל את כל הפרקים. בתוסף: לכל פרק נוצר «פרק חדש» ב-Schooler ואז השיעורים שבו.
                     </p>
                     <div className="actions">
                       <button type="button" onClick={() => exportCourseForExtension(activeCourse)}>
                         ייצא לתוסף Schooler
                       </button>
                     </div>
-                    <ul className="episode-list">
-                      {activeCourse.videos.map((video) => (
-                        <li key={`${activeCourse.id}-${video.videoId}`} className="episode-item">
-                          <p>{getEpisodeTitle(video)}</p>
+                    <ul className="chapter-list">
+                      {activeCourseChapters.map((chapter, chapterIndex) => (
+                        <li key={chapter.id} className="chapter-item">
+                          <div className="chapter-item-head">
+                            <strong>
+                              פרק {chapterIndex + 1}: {chapter.name}
+                            </strong>
+                            <p className="note">{chapter.videos?.length || 0} שיעורים</p>
+                          </div>
                           <div className="actions">
                             <button
                               type="button"
-                              onClick={() =>
-                                copyText(
-                                  buildHostedEmbedUrl(video.videoId, appOrigin),
-                                  `קישור הטמעה קבוע · ${getEpisodeTitle(video)}`,
-                                )
-                              }
+                              onClick={() => loadCourseIntoPlayer(activeCourse, chapter)}
                             >
-                              העתק קישור הטמעה
+                              טען לנגן
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeChapterFromCourse(activeCourse, chapter.id)}
+                            >
+                              הסר פרק
                             </button>
                           </div>
-                          <code className="code-line">{buildHostedEmbedUrl(video.videoId, appOrigin)}</code>
+                          <ul className="episode-list">
+                            {(chapter.videos || []).map((video) => (
+                              <li
+                                key={`${chapter.id}-${video.videoId}`}
+                                className="episode-item"
+                              >
+                                <p>{getEpisodeTitle(video)}</p>
+                                <div className="actions">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      copyText(
+                                        buildHostedEmbedUrl(video.videoId, appOrigin),
+                                        `קישור הטמעה קבוע · ${getEpisodeTitle(video)}`,
+                                      )
+                                    }
+                                  >
+                                    העתק קישור הטמעה
+                                  </button>
+                                </div>
+                                <code className="code-line">
+                                  {buildHostedEmbedUrl(video.videoId, appOrigin)}
+                                </code>
+                              </li>
+                            ))}
+                          </ul>
                         </li>
                       ))}
                     </ul>

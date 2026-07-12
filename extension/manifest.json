@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Schooler Lesson Importer",
-  "version": "1.0.5",
-  "description": "ייבוא שיעורים עם שמות וקישורי הטמעה לדף עריכת קורס ב-Schooler",
+  "version": "1.0.6",
+  "description": "ייבוא פרקים ושיעורים עם קישורי הטמעה לדף עריכת קורס ב-Schooler",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["https://my.schooler.biz/*"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "ייבוא שיעורים ל-Schooler",
+    "default_title": "ייבוא פרקים ושיעורים ל-Schooler",
     "default_popup": "popup.html"
   },
   "content_scripts": [

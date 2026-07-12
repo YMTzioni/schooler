@@ -10,15 +10,47 @@ const setStatus = (text, kind = '') => {
   statusEl.textContent = text
 }
 
+const countLessons = (payload) => {
+  if (Array.isArray(payload?.chapters) && payload.chapters.length) {
+    return payload.chapters.reduce((sum, chapter) => sum + (chapter.lessons?.length || 0), 0)
+  }
+  return payload?.lessons?.length || 0
+}
+
+const isSupportedPayload = (payload) => {
+  const version = Number(payload?.version)
+  if (version !== 1 && version !== 2) return false
+  return countLessons(payload) > 0
+}
+
 const renderPreview = (payload) => {
-  if (!payload?.lessons?.length) {
+  if (!isSupportedPayload(payload)) {
     previewEl.textContent = ''
     return
   }
+
+  if (Array.isArray(payload.chapters) && payload.chapters.length) {
+    const lines = payload.chapters.slice(0, 6).map((chapter) => {
+      const lessons = chapter.lessons?.length || 0
+      return `פרק ${chapter.order}: ${chapter.name} (${lessons} שיעורים)`
+    })
+    const more =
+      payload.chapters.length > 6 ? `\n… ועוד ${payload.chapters.length - 6} פרקים` : ''
+    previewEl.textContent = `קורס: ${payload.course?.name || 'ללא שם'}\n${lines.join('\n')}${more}`
+    return
+  }
+
   const lines = payload.lessons.slice(0, 8).map((lesson) => `${lesson.order}. ${lesson.title}`)
-  const more =
-    payload.lessons.length > 8 ? `\n… ועוד ${payload.lessons.length - 8} שיעורים` : ''
+  const more = payload.lessons.length > 8 ? `\n… ועוד ${payload.lessons.length - 8} שיעורים` : ''
   previewEl.textContent = `קורס: ${payload.course?.name || 'ללא שם'}\n${lines.join('\n')}${more}`
+}
+
+const payloadSummary = (payload) => {
+  const lessons = countLessons(payload)
+  if (Array.isArray(payload?.chapters) && payload.chapters.length) {
+    return `${payload.course?.name || 'קורס'} · ${payload.chapters.length} פרקים · ${lessons} שיעורים`
+  }
+  return `${payload?.course?.name || 'קורס'} · ${lessons} שיעורים`
 }
 
 const sendToContent = (payload) =>
@@ -38,14 +70,11 @@ fileInput.addEventListener('change', async (event) => {
   try {
     const text = await file.text()
     const parsed = JSON.parse(text)
-    if (!parsed?.lessons?.length) {
-      throw new Error('הקובץ לא מכיל שיעורים')
-    }
-    if (Number(parsed.version) !== 1) {
-      throw new Error('גרסת קובץ לא נתמכת (דרוש version: 1)')
+    if (!isSupportedPayload(parsed)) {
+      throw new Error('הקובץ לא מכיל שיעורים (דרוש version 1 או 2)')
     }
     loadedPayload = parsed
-    setStatus(`נטען: ${parsed.course?.name || 'קורס'} · ${parsed.lessons.length} שיעורים`, 'ok')
+    setStatus(`נטען: ${payloadSummary(parsed)}`, 'ok')
     renderPreview(parsed)
     chrome.storage.local.set({ schoolerImportPayload: parsed })
   } catch (error) {
@@ -56,11 +85,11 @@ fileInput.addEventListener('change', async (event) => {
 })
 
 document.getElementById('startBtn').addEventListener('click', async () => {
-  if (!loadedPayload?.lessons?.length) {
+  if (!isSupportedPayload(loadedPayload)) {
     const stored = await chrome.storage.local.get('schoolerImportPayload')
     loadedPayload = stored.schoolerImportPayload || null
   }
-  if (!loadedPayload?.lessons?.length) {
+  if (!isSupportedPayload(loadedPayload)) {
     setStatus('טען קובץ JSON לפני התחלה', 'error')
     return
   }
@@ -94,12 +123,9 @@ document.getElementById('refreshBtn').addEventListener('click', async () => {
 })
 
 chrome.storage.local.get('schoolerImportPayload', (data) => {
-  if (data.schoolerImportPayload?.lessons?.length) {
+  if (isSupportedPayload(data.schoolerImportPayload)) {
     loadedPayload = data.schoolerImportPayload
-    setStatus(
-      `שמור מהפעם הקודמת: ${loadedPayload.course?.name || 'קורס'} · ${loadedPayload.lessons.length} שיעורים`,
-      'ok',
-    )
+    setStatus(`שמור מהפעם הקודמת: ${payloadSummary(loadedPayload)}`, 'ok')
     renderPreview(loadedPayload)
   }
 })

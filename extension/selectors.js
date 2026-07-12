@@ -1,12 +1,16 @@
 /** Selectors for Schooler course edit page. Keep in one place. */
 const SELECTORS = {
   createLessonBtn: 'a.teacher__create-new-lesson',
+  createChapterText: 'פרק חדש',
   tocItem: 'li.toc-item',
+  tocHeader: 'li.toc-header',
   activeTocItem: 'li.toc-item.lesson-active',
   lessonNameInItem:
     '.lesson-item .lesson.caption, .lesson-item .colored-item, .lesson-item a span, .lesson-item a, .lesson-item span',
+  chapterNameInHeader:
+    '.colored-item, .caption, .section-caption, a span, span, a',
   renameInput:
-    '.teacher__edit-lesson-in-toc input, .teacher__edit-lesson-in-toc textarea, li.toc-item.lesson-active input, li.toc-item.lesson-active textarea',
+    '.teacher__edit-lesson-in-toc input, .teacher__edit-lesson-in-toc textarea, li.toc-item.lesson-active input, li.toc-item.lesson-active textarea, li.toc-header input, li.toc-header textarea',
   radioWww: '#radio_www',
   radioWwwLabel: 'label[for="radio_www"]',
   popup: '.popup',

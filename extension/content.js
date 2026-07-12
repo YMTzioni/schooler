@@ -112,7 +112,19 @@
 
   const getCreateButton = () => qs(SELECTORS.createLessonBtn)
   const getTocItems = () => qsa(SELECTORS.tocItem)
+  const getTocHeaders = () => qsa(SELECTORS.tocHeader)
   const getActiveLessonItem = () => qs(SELECTORS.activeTocItem) || getTocItems().at(-1) || null
+
+  const getCreateChapterControl = () => {
+    const nodes = qsa('span.colored-item, a, button, span, div')
+    return (
+      nodes.find((el) => {
+        if (isUnsafeClickTarget(el)) return false
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim()
+        return text === SELECTORS.createChapterText
+      }) || null
+    )
+  }
 
   const getLessonHref = (item) => {
     const link = item?.querySelector?.('a[href*="/edit"]')
@@ -122,6 +134,44 @@
   const getLessonNameTarget = (item) => {
     if (!item) return null
     return qs(SELECTORS.lessonNameInItem, item) || qs('.lesson-item', item)
+  }
+
+  const getChapterNameTarget = (header) => {
+    if (!header) return null
+    return qs(SELECTORS.chapterNameInHeader, header) || header
+  }
+
+  const renameViaDblClick = async (target, title, { root = document, label = 'שם' } = {}) => {
+    if (!target) throw new Error(`לא נמצא ${label} לשינוי`)
+    click(target)
+    await sleep(300)
+    target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }))
+    await sleep(400)
+
+    const input = await waitFor(
+      () =>
+        qs('input, textarea', root) ||
+        qs(SELECTORS.renameInput) ||
+        (document.activeElement &&
+        (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')
+          ? document.activeElement
+          : null),
+      { timeout: 10000, label: `שדה שינוי ${label}` },
+    )
+    input.focus()
+    setNativeValue(input, title)
+    await sleep(200)
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
+    )
+    input.dispatchEvent(
+      new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
+    )
+    input.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
+    )
+    input.blur()
+    await sleep(900)
   }
 
   const waitForLessonStable = async (beforeCount, beforeUrl) => {
@@ -162,32 +212,7 @@
   const renameActiveLesson = async (title) => {
     const item = getActiveLessonItem()
     const target = getLessonNameTarget(item)
-    if (!target) throw new Error('לא נמצא שם שיעור לשינוי')
-
-    // Prefer focusing active lesson first with a single click
-    click(target)
-    await sleep(300)
-    target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }))
-    await sleep(400)
-
-    const input = await waitFor(() => qs(SELECTORS.renameInput) || qs('input, textarea', item), {
-      timeout: 10000,
-      label: 'שדה שינוי שם',
-    })
-    input.focus()
-    setNativeValue(input, title)
-    await sleep(200)
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
-    )
-    input.dispatchEvent(
-      new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
-    )
-    input.dispatchEvent(
-      new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
-    )
-    input.blur()
-    await sleep(900)
+    await renameViaDblClick(target, title, { root: item || document, label: 'שם שיעור' })
 
     await waitFor(
       () => {
@@ -198,6 +223,76 @@
       { timeout: 8000, label: 'אישור שם שיעור' },
     ).catch(() => null)
   }
+
+  const createNewChapter = async (name) => {
+    const before = getTocHeaders().length
+    const control = getCreateChapterControl()
+    if (!control) throw new Error('לא נמצא כפתור "פרק חדש"')
+    const clickTarget = control.closest('a, button, [role="button"]') || control
+    click(clickTarget)
+
+    const header = await waitFor(
+      () => {
+        const headers = getTocHeaders()
+        if (headers.length > before) return headers.at(-1)
+        // Some Schooler builds may not use toc-header class — fall back to last colored section title.
+        if (before === 0) {
+          const candidates = qsa('li').filter((li) => {
+            const text = (li.textContent || '').replace(/\s+/g, ' ').trim()
+            return li.classList.contains('toc-header') || /^פרק\s*\d+/u.test(text)
+          })
+          return candidates.at(-1) || null
+        }
+        return null
+      },
+      { timeout: 20000, label: 'פרק חדש בתוכן העניינים' },
+    )
+
+    await sleep(700)
+    const target = getChapterNameTarget(header)
+    await renameViaDblClick(target, name, { root: header || document, label: 'שם פרק' })
+
+    await waitFor(
+      () => {
+        const text = (getChapterNameTarget(header)?.textContent || header?.textContent || '').trim()
+        return text.includes(name.slice(0, Math.min(12, name.length))) ? header : null
+      },
+      { timeout: 8000, label: 'אישור שם פרק' },
+    ).catch(() => null)
+
+    return header
+  }
+
+  const normalizeImportChapters = (payload) => {
+    if (Array.isArray(payload?.chapters) && payload.chapters.length) {
+      return payload.chapters
+        .slice()
+        .sort((a, b) => Number(a.order) - Number(b.order))
+        .map((chapter) => ({
+          ...chapter,
+          name: chapter.name || `פרק ${chapter.order || 1}`,
+          lessons: (Array.isArray(chapter.lessons) ? chapter.lessons : [])
+            .slice()
+            .sort((a, b) => Number(a.order) - Number(b.order)),
+        }))
+    }
+
+    // Legacy v1: one implicit chapter of flat lessons (no "פרק חדש" click).
+    const lessons = (Array.isArray(payload?.lessons) ? payload.lessons : [])
+      .slice()
+      .sort((a, b) => Number(a.order) - Number(b.order))
+    return [
+      {
+        order: 1,
+        name: payload?.course?.name || 'פרק 1',
+        lessons,
+        skipCreateChapter: true,
+      },
+    ]
+  }
+
+  const countImportLessons = (chapters) =>
+    chapters.reduce((sum, chapter) => sum + (chapter.lessons?.length || 0), 0)
 
   const contentTypePopupVisible = () =>
     qs(SELECTORS.radioWww) ||
@@ -428,36 +523,69 @@
 
   const startImport = async ({ payload, startFrom = 1 }) => {
     if (state.running) return { ok: false, error: 'ייבוא כבר רץ' }
-    if (!payload?.lessons?.length) return { ok: false, error: 'אין שיעורים לייבוא' }
+
+    const chapters = normalizeImportChapters(payload)
+    const totalLessons = countImportLessons(chapters)
+    if (!totalLessons) return { ok: false, error: 'אין שיעורים לייבוא' }
     if (!getCreateButton()) {
       return { ok: false, error: 'לא בדף עריכת קורס של Schooler (חסר כפתור שיעור חדש)' }
     }
 
-    const lessons = payload.lessons
-      .slice()
-      .sort((a, b) => Number(a.order) - Number(b.order))
-      .filter((lesson) => Number(lesson.order) >= Number(startFrom))
+    const hasChaptersToCreate = chapters.some((chapter) => !chapter.skipCreateChapter)
+    if (hasChaptersToCreate && !getCreateChapterControl()) {
+      return { ok: false, error: 'לא נמצא כפתור "פרק חדש" בדף העריכה' }
+    }
 
     state.running = true
     state.stopRequested = false
-    state.total = lessons.length
+    state.total = Math.max(0, totalLessons - Math.max(0, Number(startFrom) - 1))
     state.current = 0
     state.lastError = ''
     ensurePanel()
-    updatePanel('מתחיל ייבוא…')
+    updatePanel(
+      hasChaptersToCreate
+        ? `מתחיל ייבוא · ${chapters.length} פרקים · ${state.total} שיעורים…`
+        : 'מתחיל ייבוא…',
+    )
 
+    let globalLessonIndex = 0
+    let importedCount = 0
     try {
-      for (const lesson of lessons) {
+      for (const chapter of chapters) {
         if (state.stopRequested) break
-        state.current += 1
-        try {
-          await importLesson(lesson)
-        } catch (error) {
-          state.lastError = error.message || String(error)
-          updatePanel(`שגיאה בשיעור ${lesson.order}: ${lesson.title}`)
-          throw error
+
+        const chapterStart = globalLessonIndex + 1
+        const chapterEnd = globalLessonIndex + (chapter.lessons?.length || 0)
+        const willImportFromChapter = chapterEnd >= Number(startFrom)
+        // Create chapter only when import starts at/before this chapter (not mid-resume inside it).
+        const shouldCreateChapter =
+          !chapter.skipCreateChapter &&
+          willImportFromChapter &&
+          chapterStart >= Number(startFrom)
+
+        if (shouldCreateChapter) {
+          updatePanel(`יוצר פרק: ${chapter.name}`)
+          await createNewChapter(chapter.name)
+          await sleep(900)
         }
-        await sleep(1200)
+
+        for (const lesson of chapter.lessons || []) {
+          if (state.stopRequested) break
+          globalLessonIndex += 1
+          if (globalLessonIndex < Number(startFrom)) continue
+
+          importedCount += 1
+          state.current = importedCount
+          try {
+            updatePanel(`פרק: ${chapter.name}\nשיעור: ${lesson.title}`)
+            await importLesson(lesson)
+          } catch (error) {
+            state.lastError = error.message || String(error)
+            updatePanel(`שגיאה בשיעור ${lesson.order}: ${lesson.title}`)
+            throw error
+          }
+          await sleep(1200)
+        }
       }
 
       if (state.stopRequested) {
@@ -478,7 +606,8 @@
     const handle = async () => {
       if (message?.type === 'START_IMPORT') {
         if (state.running) return { ok: false, error: 'ייבוא כבר רץ' }
-        if (!message.payload?.lessons?.length) return { ok: false, error: 'אין שיעורים לייבוא' }
+        const chapters = normalizeImportChapters(message.payload)
+        if (!countImportLessons(chapters)) return { ok: false, error: 'אין שיעורים לייבוא' }
         if (!getCreateButton()) {
           return { ok: false, error: 'לא בדף עריכת קורס של Schooler (חסר כפתור שיעור חדש)' }
         }

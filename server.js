@@ -949,16 +949,53 @@ const buildEmbedPayload = (video, index) => {
 const normalizeCoursePayload = (input = {}) => {
   const id = String(input.id || '').trim()
   const name = String(input.name || '').trim()
+  if (!id || !name) return null
+
+  const chaptersInput = Array.isArray(input.chapters) ? input.chapters : null
   const videos = Array.isArray(input.videos) ? input.videos : []
   const playlistId =
     input.playlistId === null || input.playlistId === undefined ? null : String(input.playlistId)
-  if (!id || !name) return null
+
+  const chapters = chaptersInput
+    ? chaptersInput
+        .map((chapter, index) => {
+          const chapterVideos = Array.isArray(chapter?.videos) ? chapter.videos : []
+          const chapterId = String(chapter?.id || chapter?.playlistId || `${id}-ch-${index + 1}`).trim()
+          const chapterName = String(chapter?.name || `פרק ${index + 1}`).trim()
+          if (!chapterId || !chapterName) return null
+          return {
+            id: chapterId,
+            name: chapterName,
+            playlistId:
+              chapter?.playlistId === null || chapter?.playlistId === undefined
+                ? null
+                : String(chapter.playlistId),
+            total: Number(chapter?.total) || chapterVideos.length,
+            videos: chapterVideos,
+          }
+        })
+        .filter(Boolean)
+    : videos.length
+      ? [
+          {
+            id: playlistId || id,
+            name,
+            playlistId,
+            total: Number(input.total) || videos.length,
+            videos,
+          },
+        ]
+      : []
+
+  const flatVideos = chapters.flatMap((chapter) => chapter.videos || [])
+
   return {
     id,
     name,
-    playlistId,
-    total: Number(input.total) || videos.length,
-    videos,
+    playlistId: chapters[0]?.playlistId || playlistId,
+    total: flatVideos.length || Number(input.total) || 0,
+    videos: flatVideos,
+    chapters,
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }
@@ -1632,7 +1669,7 @@ app.post('/api/library/courses', async (req, res) => {
   try {
     const payload = normalizeCoursePayload(req.body)
     if (!payload) {
-      return res.status(400).json({ message: 'חסרים id או name או videos לקורס' })
+      return res.status(400).json({ message: 'חסרים id או name לקורס (או פרקים/שיעורים ריקים)' })
     }
 
     const current = await readCourseLibrary()

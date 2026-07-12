@@ -88,9 +88,8 @@ export const sortLessonsByAscendingNumber = (lessons) => {
     }))
 }
 
-export const buildSchoolerImportPayload = (course, origin = null) => {
-  const videos = Array.isArray(course?.videos) ? course.videos : []
-  const unsortedLessons = videos.map((video, index) => {
+export const buildLessonsFromVideos = (videos = [], origin = null) => {
+  const unsortedLessons = (Array.isArray(videos) ? videos : []).map((video, index) => {
     const order = Number(video.index) || index + 1
     return {
       order,
@@ -99,17 +98,78 @@ export const buildSchoolerImportPayload = (course, origin = null) => {
       embedUrl: buildHostedEmbedUrl(video.videoId, origin),
     }
   })
-  const lessons = sortLessonsByAscendingNumber(unsortedLessons)
+  return sortLessonsByAscendingNumber(unsortedLessons)
+}
+
+/** Normalize legacy single-playlist courses into chapter-based bundles. */
+export const normalizeBundleChapters = (course = {}) => {
+  if (Array.isArray(course.chapters) && course.chapters.length) {
+    return course.chapters.map((chapter, index) => ({
+      id: chapter.id || chapter.playlistId || `${course.id || 'chapter'}-${index + 1}`,
+      name: chapter.name || `פרק ${index + 1}`,
+      playlistId: chapter.playlistId || null,
+      total: Number(chapter.total) || chapter.videos?.length || 0,
+      videos: Array.isArray(chapter.videos) ? chapter.videos : [],
+    }))
+  }
+
+  if (Array.isArray(course.videos) && course.videos.length) {
+    return [
+      {
+        id: course.playlistId || course.id || `chapter-${Date.now()}`,
+        name: course.name || 'פרק 1',
+        playlistId: course.playlistId || null,
+        total: Number(course.total) || course.videos.length,
+        videos: course.videos,
+      },
+    ]
+  }
+
+  return []
+}
+
+export const countBundleLessons = (course = {}) =>
+  normalizeBundleChapters(course).reduce((sum, chapter) => sum + (chapter.videos?.length || 0), 0)
+
+/**
+ * Build extension import JSON.
+ * version 2 = multi-chapter; still includes flattened lessons for older tooling.
+ */
+export const buildSchoolerImportPayload = (course, origin = null) => {
+  const chaptersSource = normalizeBundleChapters(course)
+  const chapters = chaptersSource.map((chapter, index) => ({
+    order: index + 1,
+    id: chapter.id,
+    name: chapter.name,
+    playlistId: chapter.playlistId,
+    lessons: buildLessonsFromVideos(chapter.videos, origin),
+  }))
+
+  const flatLessons = chapters.flatMap((chapter) =>
+    chapter.lessons.map((lesson) => ({
+      ...lesson,
+      chapterOrder: chapter.order,
+      chapterName: chapter.name,
+    })),
+  )
 
   return {
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     course: {
       id: course?.id || null,
       name: course?.name || 'קורס',
-      playlistId: course?.playlistId || null,
     },
-    lessons,
+    chapters,
+    // Backward-compatible flat list (v1 importers ignore chapters).
+    lessons: flatLessons.map((lesson, index) => ({
+      order: index + 1,
+      title: lesson.title,
+      videoId: lesson.videoId,
+      embedUrl: lesson.embedUrl,
+      chapterOrder: lesson.chapterOrder,
+      chapterName: lesson.chapterName,
+    })),
   }
 }
 
