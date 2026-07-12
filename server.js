@@ -389,6 +389,20 @@ const collectPlaylistVideos = (node, videos = [], seen = new Set()) => {
     }
   }
 
+  // YouTube playlist pages now often use lockupViewModel instead of playlistVideoRenderer.
+  if (node.lockupViewModel) {
+    const lockup = node.lockupViewModel
+    const videoId = lockup.contentId
+    const title = lockup.metadata?.lockupMetadataViewModel?.title?.content
+    if (videoId && !seen.has(videoId)) {
+      seen.add(videoId)
+      videos.push({
+        videoId,
+        title: decodeTitle(title || `פרק ${videos.length + 1}`),
+      })
+    }
+  }
+
   for (const value of Object.values(node)) {
     if (Array.isArray(value)) {
       value.forEach((item) => collectPlaylistVideos(item, videos, seen))
@@ -400,6 +414,105 @@ const collectPlaylistVideos = (node, videos = [], seen = new Set()) => {
   return videos
 }
 
+const extractLockupTitlesFromHtml = (html) => {
+  const titleById = new Map()
+  // Pair nearby lockup title + contentId blocks from the rendered HTML.
+  const blockRe =
+    /"lockupMetadataViewModel":\{"title":\{"content":"((?:\\.|[^"\\])*)"[\s\S]{0,4000}?"contentId":"([a-zA-Z0-9_-]{11})"/g
+  let match
+  while ((match = blockRe.exec(html)) !== null) {
+    const title = decodeTitle(match[1])
+    const videoId = match[2]
+    if (videoId && title) titleById.set(videoId, title)
+  }
+  return titleById
+}
+
+const isGenericEpisodeTitle = (title) => /^פרק\s*\d+$/u.test(String(title || '').trim())
+
+const fetchYoutubeOEmbedTitle = async (videoId) => {
+  try {
+    const response = await axios.get('https://www.youtube.com/oembed', {
+      params: {
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        format: 'json',
+      },
+      timeout: 8000,
+      headers: YOUTUBE_HEADERS,
+    })
+    const title = String(response.data?.title || '').trim()
+    return title || null
+  } catch {
+    return null
+  }
+}
+
+const enrichVideosWithTitles = async (videos) => {
+  const missing = videos.filter((video) => !video.title || isGenericEpisodeTitle(video.title))
+  if (!missing.length) return videos
+
+  const resolved = await Promise.all(
+    missing.map(async (video) => [video.videoId, await fetchYoutubeOEmbedTitle(video.videoId)]),
+  )
+  const titleById = new Map(resolved.filter(([, title]) => Boolean(title)))
+
+  return videos.map((video) => {
+    if (video.title && !isGenericEpisodeTitle(video.title)) return video
+    const enriched = titleById.get(video.videoId)
+    return enriched ? { ...video, title: enriched } : video
+  })
+}
+
+/** Parse leading lesson numbers from titles like "1 4 Environment Setup" or "1.2 Trends". */
+const extractLessonSortKey = (title) => {
+  const raw = String(title || '').trim()
+  const hebrewEpisode = raw.match(/^פרק\s*(\d+)/u)
+  if (hebrewEpisode) return [Number(hebrewEpisode[1])]
+
+  const leading = raw.match(/^(\d+(?:[.\s_-]+\d+){0,4})\b/)
+  if (!leading) return null
+
+  const parts = leading[1]
+    .split(/[.\s_-]+/)
+    .map((part) => Number(part))
+    .filter((part) => Number.isFinite(part))
+  return parts.length ? parts : null
+}
+
+const compareLessonSortKeys = (a, b) => {
+  const len = Math.max(a.length, b.length)
+  for (let i = 0; i < len; i += 1) {
+    const left = a[i] ?? 0
+    const right = b[i] ?? 0
+    if (left !== right) return left - right
+  }
+  return 0
+}
+
+const sortVideosByAscendingLessonNumber = (videos) => {
+  if (!Array.isArray(videos) || videos.length < 2) return videos
+
+  const keyed = videos.map((video, index) => ({
+    video,
+    index,
+    key: extractLessonSortKey(video.title),
+  }))
+  const numberedCount = keyed.filter((item) => item.key).length
+  if (numberedCount < Math.ceil(videos.length / 2)) return videos
+
+  return keyed
+    .slice()
+    .sort((a, b) => {
+      if (a.key && b.key) {
+        const compared = compareLessonSortKeys(a.key, b.key)
+        if (compared !== 0) return compared
+      } else if (a.key && !b.key) return -1
+      else if (!a.key && b.key) return 1
+      return a.index - b.index
+    })
+    .map((item) => item.video)
+}
+
 const extractVideosFromHtml = (html) => {
   const titleById = new Map()
   const initialData = extractYtInitialData(html)
@@ -409,17 +522,32 @@ const extractVideosFromHtml = (html) => {
     })
   }
 
+  extractLockupTitlesFromHtml(html).forEach((title, videoId) => {
+    if (!titleById.has(videoId) || isGenericEpisodeTitle(titleById.get(videoId))) {
+      titleById.set(videoId, title)
+    }
+  })
+
   const idPattern = /"videoId":"([a-zA-Z0-9_-]{11})"/g
+  const contentIdPattern = /"contentId":"([a-zA-Z0-9_-]{11})"/g
   const ids = []
   const uniqueIds = new Set()
 
-  let idMatch
-  while ((idMatch = idPattern.exec(html)) !== null) {
-    const videoId = idMatch[1]
+  const pushId = (videoId) => {
     if (!uniqueIds.has(videoId)) {
       uniqueIds.add(videoId)
       ids.push(videoId)
     }
+  }
+
+  let idMatch
+  while ((idMatch = idPattern.exec(html)) !== null) pushId(idMatch[1])
+  while ((idMatch = contentIdPattern.exec(html)) !== null) pushId(idMatch[1])
+
+  // Prefer ordered titles discovered from ytInitialData / lockup parsing.
+  if (titleById.size && (!ids.length || [...titleById.keys()].every((id) => uniqueIds.has(id)))) {
+    const orderedFromTitles = [...titleById.entries()].map(([videoId, title]) => ({ videoId, title }))
+    if (orderedFromTitles.length) return orderedFromTitles
   }
 
   if (!ids.length && titleById.size) {
@@ -1301,7 +1429,9 @@ app.post('/api/youtube/extract-playlist', async (req, res) => {
     const canonicalUrl = `https://www.youtube.com/playlist?list=${playlistId}`
     const response = await axios.get(canonicalUrl, { headers: YOUTUBE_HEADERS })
 
-    const rawVideos = extractVideosFromHtml(response.data)
+    const rawVideos = sortVideosByAscendingLessonNumber(
+      await enrichVideosWithTitles(extractVideosFromHtml(response.data)),
+    )
     if (!rawVideos.length) {
       return res.status(404).json({
         message:
