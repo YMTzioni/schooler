@@ -11,15 +11,24 @@ const SELECTORS = {
   radioWwwLabel: 'label[for="radio_www"]',
   popup: '.popup',
   contentTypePopup: '.popup.select-content-type, .popup .select-content-type, .select-content-type',
+  popupEmbedInput:
+    '.popup input.nm-input[type="url"], .popup input[type="url"].nm-input, input.nm-input[type="url"], input[type="url"][placeholder="https://"]',
   popupTextarea: '.popup textarea.nm-textarea, .popup textarea',
   popupSubmit: '.popup input.nm-btn[type="submit"], .popup button.nm-btn[type="submit"]',
-  // Prefer precise triggers — avoid broad .nm-btn which opens TinyMCE.
+  // Prefer precise triggers — overlay pencil on player, not TinyMCE / random .nm-btn
   contentTypeTriggers: [
-    '.custom-edit-icon',
+    'button.cta-btn',
+    '.edit-lesson-root button.cta-btn',
+    '.edit-lesson-root .video-responsive-wrap.edit-content .button_play',
+    '.edit-lesson-root .video-responsive-wrap.edit-content .button-edit',
+    '.edit-lesson-root .button_play',
+    '.edit-lesson-root .button-edit',
+    '.edit-lesson-root .button_play_wrap',
+    '.edit-lesson-root .pencil',
+    '.video-responsive-wrap.edit-content a',
+    'img[src*="lesson-edit-icon"]',
     'img[src*="lesson-edit"]',
-    '[class*="lesson-edit-icon"]',
-    'a[href="#"][class*="edit"]',
-    'button[class*="content-type"]',
-    '.teacher__select-content-type',
+    '.custom-edit-icon',
   ].join(', '),
+  editContentBtnText: 'עריכת תוכן שיעור',
 }

@@ -793,9 +793,10 @@ const buildEmbedUrl = (videoId) => buildYouTubeEmbedUrl(videoId, SCHOOLER_ORIGIN
 
 const buildEmbedPayload = (video, index) => {
   const episodeIndex = index + 1
-  const displayName = formatEpisodeName(episodeIndex, video.title)
+  const youtubeTitle = String(video.title || '').trim() || `פרק ${episodeIndex}`
+  const displayName = formatEpisodeName(episodeIndex, youtubeTitle)
   const embedUrl = buildEmbedUrl(video.videoId)
-  const safeTitle = escapeHtml(video.title)
+  const safeTitle = escapeHtml(youtubeTitle)
   const iframeAttrs = `src="${embedUrl}" title="${safeTitle}" width="100%" height="405" frameborder="0" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation" allow="encrypted-media; picture-in-picture"`
 
   const embedCode = `<iframe ${iframeAttrs}></iframe>`
@@ -805,7 +806,8 @@ const buildEmbedPayload = (video, index) => {
 
   return {
     index: episodeIndex,
-    title: video.title,
+    title: youtubeTitle,
+    youtubeTitle,
     displayName,
     fileName: sanitizeFileName(displayName),
     videoId: video.videoId,

@@ -36,8 +36,6 @@
     if (el.closest('#schooler-importer-panel')) return true
     if (el.closest('.tox, .mce-tinymce, .tox-tinymce, [id*="tinymce"], .mce-content-body')) return true
     if (el.closest('iframe')) return true
-    // Avoid accidental TOC navigation while hunting content-type UI
-    if (el.closest('li.toc-item') && !el.closest(SELECTORS.createLessonBtn)) return true
     return false
   }
 
@@ -203,8 +201,12 @@
 
   const contentTypePopupVisible = () =>
     qs(SELECTORS.radioWww) ||
+    qs('.popup .select-content-type') ||
     qs(SELECTORS.contentTypePopup) ||
-    (qs(SELECTORS.popup) && (qs(SELECTORS.popup)?.textContent || '').includes('אתר מוטמע'))
+    [...qsa(SELECTORS.popup)].some((p) => {
+      const text = p.textContent || ''
+      return text.includes('אתר מוטמע') || text.includes('סוג השיעור')
+    })
 
   const findByExactTexts = (texts) => {
     const nodes = qsa('button, a, span, div, label')
@@ -216,39 +218,148 @@
     })
   }
 
+  const hover = (element) => {
+    if (!element) return
+    element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }))
+    element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window }))
+    element.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window }))
+  }
+
+  /** User tip: hover lesson → click "עריכת תוכן שיעור" (button.cta-btn). */
+  const findEditContentButton = () => {
+    const byText = qsa('button.cta-btn, button').find((el) => {
+      if (isUnsafeClickTarget(el)) return false
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim()
+      return text === SELECTORS.editContentBtnText || text.includes('עריכת תוכן')
+    })
+    return byText || qs('button.cta-btn')
+  }
+
+  const openContentTypeViaLessonName = async () => {
+    const active = getActiveLessonItem()
+    const nameTarget = getLessonNameTarget(active)
+    const mainTitles = qsa(
+      '.edit-lesson-root h1, .edit-lesson-root h2, .edit-lesson-root .lesson-title, .edit-lesson-root .caption.active, .edit-lesson-root .lesson.caption',
+    )
+    const hoverTargets = [nameTarget, active, ...mainTitles].filter(Boolean)
+
+    // Reveal the CTA by hovering the lesson name / active item
+    for (const target of hoverTargets) {
+      hover(target)
+      await sleep(500)
+    }
+
+    // Primary action: click "עריכת תוכן שיעור"
+    const cta =
+      (await waitFor(() => findEditContentButton(), {
+        timeout: 6000,
+        label: 'כפתור עריכת תוכן שיעור',
+      }).catch(() => null)) || findEditContentButton()
+
+    if (cta) {
+      hover(cta)
+      click(cta)
+      await sleep(900)
+      if (contentTypePopupVisible()) return true
+    }
+
+    // Fallback: icons near the lesson after hover
+    for (const target of hoverTargets) {
+      hover(target)
+      await sleep(400)
+      if (contentTypePopupVisible()) return true
+
+      const nearIcons = [
+        ...(active
+          ? qsa(
+              'button.cta-btn, img[src*="lesson-edit"], img[src*="pencil"], .lesson-edit, [class*="lesson-edit"], .custom-edit-icon, .icon-edit, .button_play, .button-edit',
+              active,
+            )
+          : []),
+        ...qsa('button.cta-btn, .edit-lesson-root button.cta-btn'),
+      ]
+
+      for (const icon of nearIcons) {
+        hover(icon)
+        click(icon)
+        await sleep(700)
+        if (contentTypePopupVisible()) return true
+      }
+    }
+
+    return false
+  }
+
+  /** Try to call Schooler Redux action startSelectContentType via React fiber. */
+  const tryDispatchSelectContentType = () => {
+    const roots = [
+      ...qsa('[id^="RouterApp-react-component"]'),
+      ...qsa('.edit-lesson-root'),
+      document.getElementById('root'),
+    ].filter(Boolean)
+
+    const visit = (fiber, depth = 0) => {
+      if (!fiber || depth > 100) return false
+      const props = fiber.memoizedProps || fiber.pendingProps || {}
+      if (typeof props.changeContentType === 'function') {
+        try {
+          props.changeContentType({ preventDefault() {}, stopPropagation() {} })
+          return true
+        } catch {
+          /* continue */
+        }
+      }
+      const stateNode = fiber.stateNode
+      if (stateNode && typeof stateNode.changeContentType === 'function') {
+        try {
+          stateNode.changeContentType({ preventDefault() {}, stopPropagation() {} })
+          return true
+        } catch {
+          /* continue */
+        }
+      }
+      return visit(fiber.child, depth + 1) || visit(fiber.sibling, depth + 1)
+    }
+
+    for (const root of roots) {
+      const key = Object.keys(root).find(
+        (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'),
+      )
+      if (!key) continue
+      if (visit(root[key])) return true
+    }
+    return false
+  }
+
   const openContentTypePopup = async () => {
     if (contentTypePopupVisible()) return true
 
-    const textCandidates = findByExactTexts([
-      'סוג תוכן',
-      'בחר תוכן',
-      'הוסף תוכן',
-      'ערוך תוכן',
-      'שנה תוכן',
-      'אתר מוטמע',
-      'בחר סוג תוכן',
-    ])
+    // 1) Primary: hover/click lesson name
+    if (await openContentTypeViaLessonName()) return true
 
-    const selectorCandidates = qsa(SELECTORS.contentTypeTriggers).filter((el) => !isUnsafeClickTarget(el))
-
-    const ordered = [...textCandidates, ...selectorCandidates]
-    for (const el of ordered) {
-      click(el)
-      await sleep(600)
+    // 2) Redux handler
+    if (tryDispatchSelectContentType()) {
+      await sleep(800)
       if (contentTypePopupVisible()) return true
     }
 
-    // Empty-state placeholders in the main lesson pane (not TinyMCE)
-    const emptyStates = qsa(
-      '.edit-lesson-root .content-placeholder, .edit-lesson-root .empty-state, .edit-lesson-root [class*="placeholder"]',
-    ).filter((el) => !isUnsafeClickTarget(el))
-    for (const el of emptyStates) {
+    // 3) Cyan pencil overlay fallback
+    for (const wrap of qsa('.edit-lesson-root .video-responsive-wrap')) {
+      hover(wrap)
+      await sleep(200)
+    }
+    for (const el of qsa(SELECTORS.contentTypeTriggers)) {
+      if (isUnsafeClickTarget(el)) continue
+      hover(el)
       click(el)
-      await sleep(600)
+      await sleep(700)
       if (contentTypePopupVisible()) return true
     }
 
-    throw new Error('לא הצלחתי לפתוח את חלון בחירת סוג התוכן (נמנע מלחיצות על TinyMCE)')
+    // 4) Retry lesson name once more
+    if (await openContentTypeViaLessonName()) return true
+
+    throw new Error('לא הצלחתי ללחוץ על "עריכת תוכן שיעור". רענן והרץ שוב.')
   }
 
   const selectWwwAndFillEmbed = async (embedUrl) => {
@@ -271,19 +382,26 @@
       await sleep(500)
     }
 
-    const textarea = await waitFor(
-      () => qs(SELECTORS.popupTextarea) || qs('.popup textarea') || qs('textarea.nm-textarea'),
-      { timeout: 12000, label: 'שדה קישור הטמעה' },
+    const embedField = await waitFor(
+      () =>
+        qs(SELECTORS.popupEmbedInput) ||
+        qs('.popup input[type="url"]') ||
+        qs('input.nm-input[type="url"]') ||
+        qs('input[type="url"][placeholder="https://"]') ||
+        qs(SELECTORS.popupTextarea) ||
+        qs('.popup textarea') ||
+        qs('textarea.nm-textarea'),
+      { timeout: 12000, label: 'שדה קישור הטמעה (input url)' },
     )
-    textarea.focus()
-    setNativeValue(textarea, embedUrl)
+    embedField.focus()
+    setNativeValue(embedField, embedUrl)
     await sleep(300)
 
     const submit =
       qs(SELECTORS.popupSubmit) ||
       qsa('.popup input, .popup button').find((el) => {
         const text = `${el.value || ''} ${el.textContent || ''}`.trim()
-        return text.includes('שמור') || text.includes('אישור') || el.type === 'submit'
+        return text.includes('שמור') || text.includes('שמירה') || text.includes('אישור') || el.type === 'submit'
       })
 
     if (!submit) throw new Error('לא נמצא כפתור שמירה בפופאפ')
@@ -302,6 +420,8 @@
     await createNewLesson()
     updatePanel(`משנה שם: ${lesson.title}`)
     await renameActiveLesson(lesson.title)
+    updatePanel(`פותח עריכת תוכן דרך שם השיעור: ${lesson.title}`)
+    await sleep(500)
     updatePanel(`מדביק קישור הטמעה: ${lesson.title}`)
     await selectWwwAndFillEmbed(lesson.embedUrl)
   }
