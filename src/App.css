@@ -235,6 +235,44 @@ pre {
   gap: 0.8rem;
 }
 
+.course-save-box {
+  margin-top: 0.5rem;
+}
+
+.course-library-box {
+  margin-top: 1rem;
+}
+
+.course-library-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.course-library-item {
+  display: grid;
+  gap: 0.6rem;
+  background: #0a1120;
+  border: 1px solid #27324d;
+  border-radius: 10px;
+  padding: 0.7rem;
+}
+
+.course-library-item.active {
+  border-color: #6ea8ff;
+  box-shadow: 0 0 0 1px rgba(110, 168, 255, 0.35);
+}
+
+.course-links-grid {
+  display: grid;
+  gap: 0.8rem;
+  border-top: 1px solid #27324d;
+  padding-top: 0.7rem;
+}
+
+.course-links-grid h4 {
+  margin: 0;
+}
+
 .course-player {
   background: #0a1120;
   border: 1px solid #27324d;

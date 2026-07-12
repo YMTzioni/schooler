@@ -4,6 +4,10 @@ import ApiDashboard from './components/ApiDashboard.jsx'
 import {
   buildHostedEmbedUrl,
 } from './utils/plyrEmbed.js'
+import {
+  buildSchoolerImportFileName,
+  buildSchoolerImportPayload,
+} from './utils/courseExport.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
   SUBTITLE_SOURCE_LANGUAGES,
@@ -34,6 +38,7 @@ const loadSubtitleSettings = () => {
     return DEFAULT_SUBTITLE_SETTINGS
   }
 }
+
 
 async function apiRequest(path, options = {}) {
   let response
@@ -103,8 +108,12 @@ function App() {
   const [subtitleStatus, setSubtitleStatus] = useState('')
   const [view, setView] = useState('youtube')
   const [liveCaptionStatus, setLiveCaptionStatus] = useState(null)
+  const [courseLibrary, setCourseLibrary] = useState([])
+  const [courseNameInput, setCourseNameInput] = useState('')
+  const [activeCourseId, setActiveCourseId] = useState(null)
 
   const activeEpisode = playlistResult?.videos?.[activeEpisodeIndex] ?? null
+  const activeCourse = courseLibrary.find((course) => course.id === activeCourseId) || null
 
   useEffect(() => {
     setLiveCaptionStatus(null)
@@ -154,6 +163,28 @@ function App() {
   useEffect(() => {
     localStorage.setItem('schooler-subtitle-settings', JSON.stringify(subtitleSettings))
   }, [subtitleSettings])
+
+  useEffect(() => {
+    if (!courseLibrary.length) {
+      setActiveCourseId(null)
+      return
+    }
+    if (!activeCourseId || !courseLibrary.some((course) => course.id === activeCourseId)) {
+      setActiveCourseId(courseLibrary[0].id)
+    }
+  }, [courseLibrary, activeCourseId])
+
+  useEffect(() => {
+    const loadCourses = async () => {
+      try {
+        const data = await apiRequest('/library/courses', { method: 'GET' })
+        setCourseLibrary(Array.isArray(data.courses) ? data.courses : [])
+      } catch (error) {
+        setSubtitleStatus(error.message)
+      }
+    }
+    loadCourses()
+  }, [])
 
   const updateSubtitleSettings = (field, value) => {
     setSubtitleSettings((current) => ({ ...current, [field]: value }))
@@ -227,6 +258,66 @@ function App() {
     } finally {
       setSubtitleLoading(false)
     }
+  }
+
+  const savePlaylistAsCourse = async () => {
+    if (!playlistResult?.videos?.length) return
+    const normalizedName =
+      courseNameInput.trim() || playlistResult.title || `קורס ${playlistResult.playlistId || ''}`.trim()
+    const courseId = playlistResult.playlistId || `manual-${Date.now()}`
+    const nextCourse = {
+      id: courseId,
+      name: normalizedName || 'קורס חדש',
+      playlistId: playlistResult.playlistId || null,
+      total: playlistResult.total || playlistResult.videos.length,
+      videos: playlistResult.videos,
+    }
+    try {
+      const data = await apiRequest('/library/courses', {
+        method: 'POST',
+        body: JSON.stringify(nextCourse),
+      })
+      const savedCourse = data.course
+      setCourseLibrary((current) => {
+        const exists = current.some((course) => course.id === savedCourse.id)
+        if (exists) return current.map((course) => (course.id === savedCourse.id ? savedCourse : course))
+        return [savedCourse, ...current]
+      })
+      setActiveCourseId(courseId)
+      setCourseNameInput('')
+      setCopiedText('הקורס נשמר בשרת בהצלחה')
+      setTimeout(() => setCopiedText(''), 2000)
+    } catch (error) {
+      setSubtitleStatus(error.message)
+    }
+  }
+
+  const loadCourseIntoPlayer = (course) => {
+    setPlaylistResult({
+      playlistId: course.playlistId || course.id,
+      total: course.total || course.videos?.length || 0,
+      videos: course.videos || [],
+      title: course.name,
+    })
+    setActiveEpisodeIndex(0)
+    setActiveCourseId(course.id)
+  }
+
+  const deleteCourse = async (courseId) => {
+    try {
+      await apiRequest(`/library/courses/${encodeURIComponent(courseId)}`, { method: 'DELETE' })
+      setCourseLibrary((current) => current.filter((course) => course.id !== courseId))
+    } catch (error) {
+      setSubtitleStatus(error.message)
+    }
+  }
+
+  const exportCourseForExtension = (course) => {
+    if (!course?.videos?.length) return
+    const payload = buildSchoolerImportPayload(course, appOrigin)
+    downloadTextFile(JSON.stringify(payload, null, 2), buildSchoolerImportFileName(course))
+    setCopiedText(`יוצא JSON לתוסף · ${payload.lessons.length} שיעורים`)
+    setTimeout(() => setCopiedText(''), 2500)
   }
 
   if (hostedPlayerVideoId) {
@@ -431,6 +522,25 @@ function App() {
             {playlistError && <p className="error">{playlistError}</p>}
             {copiedText && <p className="ok">{copiedText}</p>}
             {playlistResult?.videos?.length ? (
+              <section className="settings-box grid course-save-box">
+                <h3>שמירה כקורס קבוע במערכת</h3>
+                <label>
+                  שם קורס
+                  <input
+                    placeholder={playlistResult.title || 'לדוגמה: קורס פייתון למתחילים'}
+                    value={courseNameInput}
+                    onChange={(e) => setCourseNameInput(e.target.value)}
+                  />
+                </label>
+                <div className="actions">
+                  <button type="button" onClick={savePlaylistAsCourse}>
+                    שמור/עדכן קורס מספריית הפלייליסט
+                  </button>
+                </div>
+                <p className="note">אותו Playlist נשמר עם מזהה קבוע, כך שקישורי ההטמעה של הפרקים נשארים קבועים.</p>
+              </section>
+            ) : null}
+            {playlistResult?.videos?.length ? (
               <div className="playlist-results">
                 <div className="row">
                   <p>
@@ -515,6 +625,80 @@ function App() {
               </div>
             ) : null}
           </form>
+
+          <section className="settings-box grid course-library-box">
+            <h3>ספריית קורסים במערכת שלנו</h3>
+            {!courseLibrary.length ? (
+              <p className="note">עדיין אין קורסים שמורים. חלץ פלייליסט ושמור אותו כדי לייצר ספרייה קבועה.</p>
+            ) : (
+              <>
+                <div className="course-library-list">
+                  {courseLibrary.map((course) => (
+                    <div
+                      key={course.id}
+                      className={`course-library-item ${course.id === activeCourseId ? 'active' : ''}`}
+                    >
+                      <div>
+                        <strong>{course.name}</strong>
+                        <p className="note">
+                          {course.videos?.length || 0} פרקים · מזהה קורס: {course.id}
+                        </p>
+                      </div>
+                      <div className="actions">
+                        <button type="button" onClick={() => loadCourseIntoPlayer(course)}>
+                          טען לנגן
+                        </button>
+                        <button type="button" onClick={() => setActiveCourseId(course.id)}>
+                          נהל קישורים
+                        </button>
+                        <button type="button" onClick={() => exportCourseForExtension(course)}>
+                          ייצא לתוסף Schooler
+                        </button>
+                        <button type="button" onClick={() => deleteCourse(course.id)}>
+                          מחק קורס
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {activeCourse?.videos?.length ? (
+                  <div className="course-links-grid">
+                    <h4>קישורים קבועים · {activeCourse.name}</h4>
+                    <p className="note">
+                      הורד JSON → פתח את דף עריכת הקורס ב-Schooler → טען את הקובץ בתוסף והרץ ייבוא.
+                    </p>
+                    <div className="actions">
+                      <button type="button" onClick={() => exportCourseForExtension(activeCourse)}>
+                        ייצא לתוסף Schooler
+                      </button>
+                    </div>
+                    <ul className="episode-list">
+                      {activeCourse.videos.map((video) => (
+                        <li key={`${activeCourse.id}-${video.videoId}`} className="episode-item">
+                          <p>{video.displayName || `פרק ${video.index}: ${video.title}`}</p>
+                          <div className="actions">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                copyText(
+                                  buildHostedEmbedUrl(video.videoId, appOrigin),
+                                  `קישור הטמעה קבוע · ${video.displayName || video.title}`,
+                                )
+                              }
+                            >
+                              העתק קישור הטמעה
+                            </button>
+                          </div>
+                          <code className="code-line">{buildHostedEmbedUrl(video.videoId, appOrigin)}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </section>
           </section>
         </section>
       </div>

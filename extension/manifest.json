@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Schooler Lesson Importer",
+  "version": "1.0.0",
+  "description": "ייבוא שיעורים עם שמות וקישורי הטמעה לדף עריכת קורס ב-Schooler",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["https://my.schooler.biz/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ייבוא שיעורים ל-Schooler",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://my.schooler.biz/t/*/s/*/*/edit*"],
+      "js": ["selectors.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ import axios from 'axios'
 import cookieParser from 'cookie-parser'
 import crypto from 'node:crypto'
 import path from 'node:path'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 import {
@@ -57,6 +57,8 @@ const PORT = process.env.PORT || 3030
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
 const BASE_URL = SCHOOLER_API_BASE
 const distPath = path.join(__dirname, 'dist')
+const dataDirPath = path.join(__dirname, 'data')
+const courseLibraryPath = path.join(dataDirPath, 'course-library.json')
 const isProduction = process.env.NODE_ENV === 'production'
 const isVercel = Boolean(process.env.VERCEL)
 const isCloudHost = Boolean(process.env.RENDER || isVercel)
@@ -814,6 +816,40 @@ const buildEmbedPayload = (video, index) => {
   }
 }
 
+const normalizeCoursePayload = (input = {}) => {
+  const id = String(input.id || '').trim()
+  const name = String(input.name || '').trim()
+  const videos = Array.isArray(input.videos) ? input.videos : []
+  const playlistId =
+    input.playlistId === null || input.playlistId === undefined ? null : String(input.playlistId)
+  if (!id || !name) return null
+  return {
+    id,
+    name,
+    playlistId,
+    total: Number(input.total) || videos.length,
+    videos,
+    createdAt: input.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+const readCourseLibrary = async () => {
+  try {
+    const raw = await readFile(courseLibraryPath, 'utf8')
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+}
+
+const writeCourseLibrary = async (courses) => {
+  await mkdir(dataDirPath, { recursive: true })
+  await writeFile(courseLibraryPath, `${JSON.stringify(courses, null, 2)}\n`, 'utf8')
+}
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
@@ -1425,6 +1461,54 @@ app.post('/api/youtube/subtitles/bulk', async (req, res) => {
     return res.json({ results, errors, total: videos.length })
   } catch (error) {
     return handleApiError(res, error)
+  }
+})
+
+app.get('/api/library/courses', async (_req, res) => {
+  try {
+    const courses = await readCourseLibrary()
+    return res.json({ courses })
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'שגיאה בקריאת ספריית קורסים' })
+  }
+})
+
+app.post('/api/library/courses', async (req, res) => {
+  try {
+    const payload = normalizeCoursePayload(req.body)
+    if (!payload) {
+      return res.status(400).json({ message: 'חסרים id או name או videos לקורס' })
+    }
+
+    const current = await readCourseLibrary()
+    const existing = current.find((course) => course.id === payload.id)
+    const next = existing
+      ? current.map((course) =>
+          course.id === payload.id
+            ? { ...existing, ...payload, createdAt: existing.createdAt || payload.createdAt }
+            : course,
+        )
+      : [{ ...payload }, ...current]
+
+    await writeCourseLibrary(next)
+    return res.json({ ok: true, course: next.find((course) => course.id === payload.id), total: next.length })
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'שגיאה בשמירת קורס' })
+  }
+})
+
+app.delete('/api/library/courses/:id', async (req, res) => {
+  try {
+    const targetId = String(req.params.id || '').trim()
+    if (!targetId) {
+      return res.status(400).json({ message: 'חסר מזהה קורס למחיקה' })
+    }
+    const current = await readCourseLibrary()
+    const next = current.filter((course) => course.id !== targetId)
+    await writeCourseLibrary(next)
+    return res.json({ ok: true, total: next.length })
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'שגיאה במחיקת קורס' })
   }
 })
 

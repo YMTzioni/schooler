@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ייבוא שיעורים ל-Schooler</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 14px;
+        width: 360px;
+        color: #1b2437;
+        background: #f5f7fb;
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0 0 10px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #4a5875;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+        margin-bottom: 10px;
+      }
+      input[type='file'],
+      input[type='number'] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px;
+        border: 1px solid #c5d0e6;
+        border-radius: 6px;
+        background: #fff;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 0;
+        border-radius: 6px;
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .primary {
+        background: #2f6fed;
+        color: #fff;
+      }
+      .danger {
+        background: #c23b3b;
+        color: #fff;
+      }
+      .ghost {
+        background: #e7edf8;
+        color: #243352;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+        min-height: 36px;
+        white-space: pre-wrap;
+      }
+      #preview {
+        margin-top: 8px;
+        max-height: 140px;
+        overflow: auto;
+        background: #fff;
+        border: 1px solid #d5deef;
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 11px;
+      }
+      .ok {
+        color: #1f7a3d;
+      }
+      .error {
+        color: #b42323;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ייבוא שיעורים ל-Schooler</h1>
+    <p>טען JSON שיוצא מ-Schooler Course Studio והרץ ייבוא בדף עריכת הקורס.</p>
+
+    <label>
+      קובץ ייצוא JSON
+      <input id="fileInput" type="file" accept="application/json,.json" />
+    </label>
+
+    <label>
+      התחל משיעור מספר (1 = התחלה)
+      <input id="startFrom" type="number" min="1" value="1" />
+    </label>
+
+    <div class="actions">
+      <button id="startBtn" class="primary" type="button">התחל ייבוא</button>
+      <button id="stopBtn" class="danger" type="button">עצור</button>
+      <button id="refreshBtn" class="ghost" type="button">רענן סטטוס</button>
+    </div>
+
+    <div id="status">אין קובץ טעון</div>
+    <div id="preview"></div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
