@@ -2,9 +2,6 @@ import { useEffect, useState } from 'react'
 import PlyrPlayer from './components/PlyrPlayer.jsx'
 import ApiDashboard from './components/ApiDashboard.jsx'
 import {
-  buildHostedEmbedUrl,
-} from './utils/plyrEmbed.js'
-import {
   buildSchoolerImportFileName,
   buildSchoolerImportPayload,
   countBundleLessons,
@@ -116,10 +113,13 @@ function App() {
   const [courseNameInput, setCourseNameInput] = useState('')
   const [chapterNameInput, setChapterNameInput] = useState('')
   const [activeCourseId, setActiveCourseId] = useState(null)
+  const [showChapterForm, setShowChapterForm] = useState(true)
+  const [courseSaving, setCourseSaving] = useState(false)
 
   const activeEpisode = playlistResult?.videos?.[activeEpisodeIndex] ?? null
   const activeCourse = courseLibrary.find((course) => course.id === activeCourseId) || null
   const activeCourseChapters = activeCourse ? normalizeBundleChapters(activeCourse) : []
+  const draftLessonCount = playlistResult?.videos?.length || 0
 
   useEffect(() => {
     setLiveCaptionStatus(null)
@@ -345,67 +345,113 @@ function App() {
     return savedCourse
   }
 
-  /** Save extracted playlist as a chapter (optionally create a new course bundle). */
-  const savePlaylistAsChapter = async ({ asNewBundle }) => {
-    if (!playlistResult?.videos?.length) return
+  const resetChapterDraft = () => {
+    setChapterNameInput('')
+    setPlaylistUrl('')
+    setPlaylistResult(null)
+    setPlaylistError('')
+    setActiveEpisodeIndex(0)
+    setShowChapterForm(true)
+  }
 
-    const chapterName =
-      chapterNameInput.trim() ||
-      playlistResult.title ||
-      `פרק ${playlistResult.playlistId || ''}`.trim() ||
-      'פרק חדש'
-    const videos = await refreshVideosTitles(playlistResult.videos)
-    const chapter = {
-      id: playlistResult.playlistId || `chapter-${Date.now()}`,
-      name: chapterName,
-      playlistId: playlistResult.playlistId || null,
-      total: videos.length,
-      videos,
+  /** Step 1: create an empty named course, then add chapters. */
+  const createCourse = async (event) => {
+    event?.preventDefault?.()
+    const name = courseNameInput.trim()
+    if (!name) {
+      setCopiedText('')
+      setSubtitleStatus('יש לבחור שם לקורס')
+      return
     }
-
+    setCourseSaving(true)
+    setSubtitleStatus('')
     try {
-      let nextCourse
-      if (asNewBundle || !activeCourse) {
-        const bundleName = courseNameInput.trim() || chapterName
-        nextCourse = {
-          id: `bundle-${Date.now()}`,
-          name: bundleName,
-          playlistId: chapter.playlistId,
-          total: videos.length,
-          videos,
-          chapters: [chapter],
-        }
-      } else {
-        const existingChapters = normalizeBundleChapters(activeCourse)
-        const samePlaylistIndex = existingChapters.findIndex(
-          (item) => item.playlistId && chapter.playlistId && item.playlistId === chapter.playlistId,
-        )
-        const chapters =
-          samePlaylistIndex >= 0
-            ? existingChapters.map((item, index) => (index === samePlaylistIndex ? chapter : item))
-            : [...existingChapters, chapter]
-        const flatVideos = chapters.flatMap((item) => item.videos || [])
-        nextCourse = {
-          ...activeCourse,
-          name: courseNameInput.trim() || activeCourse.name,
-          playlistId: chapters[0]?.playlistId || activeCourse.playlistId || null,
-          chapters,
-          videos: flatVideos,
-          total: flatVideos.length,
-        }
+      const nextCourse = {
+        id: `bundle-${Date.now()}`,
+        name,
+        playlistId: null,
+        total: 0,
+        videos: [],
+        chapters: [],
       }
-
       await persistCourse(nextCourse)
-      setChapterNameInput('')
-      if (asNewBundle || !activeCourse) setCourseNameInput('')
-      setCopiedText(
-        asNewBundle || !activeCourse
-          ? `נוצר קורס עם הפרק "${chapterName}"`
-          : `הפרק "${chapterName}" נוסף לקורס`,
-      )
+      resetChapterDraft()
+      setCopiedText(`הקורס "${name}" נוצר — אפשר להוסיף פרק`)
       setTimeout(() => setCopiedText(''), 2500)
     } catch (error) {
       setSubtitleStatus(error.message)
+    } finally {
+      setCourseSaving(false)
+    }
+  }
+
+  const selectExistingCourse = (courseId) => {
+    setActiveCourseId(courseId || null)
+    const course = courseLibrary.find((item) => item.id === courseId)
+    if (course) setCourseNameInput(course.name)
+    resetChapterDraft()
+  }
+
+  const startAddingAnotherChapter = () => {
+    resetChapterDraft()
+    setCopiedText('מלא שם פרק וקישור פלייליסט')
+    setTimeout(() => setCopiedText(''), 2000)
+  }
+
+  /** Step 2–3: attach playlist as a named chapter on the active course. */
+  const saveChapterToActiveCourse = async () => {
+    if (!activeCourse) {
+      setSubtitleStatus('קודם צריך ליצור או לבחור קורס')
+      return
+    }
+    if (!playlistResult?.videos?.length) {
+      setSubtitleStatus('קודם חלץ פלייליסט כדי לראות את השיעורים')
+      return
+    }
+    const chapterName = chapterNameInput.trim()
+    if (!chapterName) {
+      setSubtitleStatus('יש לבחור שם לפרק')
+      return
+    }
+
+    setCourseSaving(true)
+    setSubtitleStatus('')
+    try {
+      const videos = await refreshVideosTitles(playlistResult.videos)
+      const chapter = {
+        id: playlistResult.playlistId || `chapter-${Date.now()}`,
+        name: chapterName,
+        playlistId: playlistResult.playlistId || null,
+        total: videos.length,
+        videos,
+      }
+      const existingChapters = normalizeBundleChapters(activeCourse)
+      const samePlaylistIndex = existingChapters.findIndex(
+        (item) => item.playlistId && chapter.playlistId && item.playlistId === chapter.playlistId,
+      )
+      const chapters =
+        samePlaylistIndex >= 0
+          ? existingChapters.map((item, index) => (index === samePlaylistIndex ? chapter : item))
+          : [...existingChapters, chapter]
+      const flatVideos = chapters.flatMap((item) => item.videos || [])
+      await persistCourse({
+        ...activeCourse,
+        playlistId: chapters[0]?.playlistId || activeCourse.playlistId || null,
+        chapters,
+        videos: flatVideos,
+        total: flatVideos.length,
+      })
+      setCopiedText(`הפרק "${chapterName}" נשמר בקורס (${videos.length} שיעורים)`)
+      setTimeout(() => setCopiedText(''), 2500)
+      setShowChapterForm(false)
+      setPlaylistResult(null)
+      setPlaylistUrl('')
+      setChapterNameInput('')
+      setPlaylistError('')
+    } catch (error) {
+      setSubtitleStatus(error.message)
+    } finally {
+      setCourseSaving(false)
     }
   }
 
@@ -425,6 +471,7 @@ function App() {
       setActiveCourseId(course.id)
       if (sourceChapter?.name) setChapterNameInput(sourceChapter.name)
       if (course.name) setCourseNameInput(course.name)
+      setShowChapterForm(false)
 
       const refreshedChapters = chapters.map((item) =>
         item.id === sourceChapter?.id ? { ...item, videos, total: videos.length } : item,
@@ -434,13 +481,12 @@ function App() {
       )
       if (titlesChanged) {
         const flatVideos = refreshedChapters.flatMap((item) => item.videos || [])
-        const nextCourse = {
+        await persistCourse({
           ...course,
           chapters: refreshedChapters,
           videos: flatVideos,
           total: flatVideos.length,
-        }
-        await persistCourse(nextCourse)
+        })
       }
     } catch (error) {
       setSubtitleStatus(error.message)
@@ -451,6 +497,11 @@ function App() {
     try {
       await apiRequest(`/library/courses/${encodeURIComponent(courseId)}`, { method: 'DELETE' })
       setCourseLibrary((current) => current.filter((course) => course.id !== courseId))
+      if (activeCourseId === courseId) {
+        setActiveCourseId(null)
+        resetChapterDraft()
+        setCourseNameInput('')
+      }
     } catch (error) {
       setSubtitleStatus(error.message)
     }
@@ -459,7 +510,15 @@ function App() {
   const removeChapterFromCourse = async (course, chapterId) => {
     const chapters = normalizeBundleChapters(course).filter((chapter) => chapter.id !== chapterId)
     if (!chapters.length) {
-      await deleteCourse(course.id)
+      await persistCourse({
+        ...course,
+        chapters: [],
+        videos: [],
+        total: 0,
+        playlistId: null,
+      })
+      setCopiedText('הפרק הוסר — הקורס ריק מפרקים')
+      setTimeout(() => setCopiedText(''), 2000)
       return
     }
     const flatVideos = chapters.flatMap((chapter) => chapter.videos || [])
@@ -480,7 +539,10 @@ function App() {
 
   const exportCourseForExtension = async (course) => {
     const chapters = normalizeBundleChapters(course)
-    if (!chapters.length) return
+    if (!chapters.length) {
+      setSubtitleStatus('אין פרקים לייצוא — הוסף לפחות פרק אחד')
+      return
+    }
     try {
       const refreshedChapters = []
       for (const chapter of chapters) {
@@ -586,8 +648,8 @@ function App() {
       <div className="split-columns">
         <section className="column column--youtube">
           <section className="panel">
-            <h2>דשבורד יוטיוב קורסים</h2>
-          <p>הדבק פלייליסט, צפה בפרקים דרך נגן Plyr, והעתק קוד embed ל-Schooler.</p>
+            <h2>בניית קורס לייצוא</h2>
+            <p>צור קורס → הוסף פרקים מפלייליסטים → ייצא JSON לתוסף Schooler.</p>
           {apiOnline === false && isLocalDevApp() && (
             <p className="error">
               השרת המקומי לא פעיל. הרץ בטרמינל: <code>npm run api</code> או <code>npm start</code>
@@ -612,6 +674,253 @@ function App() {
                 : 'שרת מקומי מחובר ומוכן (כולל כתוביות)'}
             </p>
           )}
+          {copiedText && <p className="ok">{copiedText}</p>}
+          {subtitleStatus && <p className="note">{subtitleStatus}</p>}
+
+          {!activeCourse ? (
+            <section className="settings-box grid course-builder-step">
+              <h3>1. יצירת קורס</h3>
+              <p className="note">בחר שם לקורס. אחר כך תוכל להוסיף פרקים (כל פרק = פלייליסט).</p>
+              <form onSubmit={createCourse} className="grid">
+                <label>
+                  שם הקורס
+                  <input
+                    placeholder="לדוגמה: בינה מלאכותית AI"
+                    value={courseNameInput}
+                    onChange={(e) => setCourseNameInput(e.target.value)}
+                    required
+                  />
+                </label>
+                <div className="actions">
+                  <button type="submit" disabled={courseSaving || !courseNameInput.trim()}>
+                    {courseSaving ? 'יוצר…' : 'צור קורס'}
+                  </button>
+                </div>
+              </form>
+              {courseLibrary.length ? (
+                <label>
+                  או המשך קורס קיים
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) selectExistingCourse(e.target.value)
+                    }}
+                  >
+                    <option value="">— בחר קורס —</option>
+                    {courseLibrary.map((course) => (
+                      <option key={course.id} value={course.id}>
+                        {course.name} ({normalizeBundleChapters(course).length} פרקים)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </section>
+          ) : (
+            <section className="settings-box grid course-builder-step">
+              <div className="course-builder-head">
+                <div>
+                  <h3>קורס: {activeCourse.name}</h3>
+                  <p className="note">
+                    {activeCourseChapters.length} פרקים · {countBundleLessons(activeCourse)} שיעורים
+                  </p>
+                </div>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    onClick={() => {
+                      setActiveCourseId(null)
+                      setCourseNameInput('')
+                      resetChapterDraft()
+                    }}
+                  >
+                    קורס חדש
+                  </button>
+                  <button type="button" className="ghost-btn" onClick={() => deleteCourse(activeCourse.id)}>
+                    מחק קורס
+                  </button>
+                </div>
+              </div>
+
+              {activeCourseChapters.length ? (
+                <div className="course-chapters-preview">
+                  <h4>פרקים בקורס</h4>
+                  <ul className="chapter-list">
+                    {activeCourseChapters.map((chapter, chapterIndex) => (
+                      <li key={chapter.id} className="chapter-item">
+                        <div className="chapter-item-head">
+                          <strong>
+                            פרק {chapterIndex + 1}: {chapter.name}
+                          </strong>
+                          <p className="note">{chapter.videos?.length || 0} שיעורים</p>
+                        </div>
+                        <ul className="lesson-preview-list">
+                          {(chapter.videos || []).map((video, index) => (
+                            <li key={`${chapter.id}-${video.videoId}`}>
+                              {index + 1}. {getEpisodeTitle(video, index + 1)}
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="actions">
+                          <button
+                            type="button"
+                            onClick={() => loadCourseIntoPlayer(activeCourse, chapter)}
+                          >
+                            הצג בנגן
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeChapterFromCourse(activeCourse, chapter.id)}
+                          >
+                            הסר פרק
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="note">עדיין אין פרקים. הוסף את הפרק הראשון למטה.</p>
+              )}
+
+              {showChapterForm ? (
+                <div className="grid chapter-add-form">
+                  <h4>
+                    {activeCourseChapters.length ? 'הוספת פרק נוסף' : '2. יצירת פרק'}
+                  </h4>
+                  <label>
+                    שם הפרק
+                    <input
+                      placeholder="לדוגמה: שיעור 1 · מבוא"
+                      value={chapterNameInput}
+                      onChange={(e) => setChapterNameInput(e.target.value)}
+                    />
+                  </label>
+                  <form onSubmit={extractPlaylist} className="grid">
+                    <label>
+                      קישור פלייליסט (השיעורים של הפרק)
+                      <input
+                        placeholder="https://www.youtube.com/playlist?list=..."
+                        value={playlistUrl}
+                        onChange={(e) => setPlaylistUrl(e.target.value)}
+                        required
+                      />
+                    </label>
+                    <button type="submit" disabled={playlistLoading || !playlistUrl.trim()}>
+                      {playlistLoading ? 'מחלץ שיעורים…' : 'חלץ והצג שיעורים בפרק'}
+                    </button>
+                  </form>
+                  {playlistError && <p className="error">{playlistError}</p>}
+
+                  {draftLessonCount ? (
+                    <div className="chapter-draft-preview">
+                      <h4>
+                        שיעורים שיתווספו לפרק
+                        {chapterNameInput.trim() ? ` "${chapterNameInput.trim()}"` : ''}
+                      </h4>
+                      <p className="note">
+                        נמצאו {draftLessonCount} שיעורים בפלייליסט {playlistResult.playlistId}
+                      </p>
+                      <ul className="lesson-preview-list">
+                        {playlistResult.videos.map((video, index) => (
+                          <li key={video.videoId}>
+                            {index + 1}. {getEpisodeTitle(video, index + 1)}
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="actions">
+                        <button
+                          type="button"
+                          disabled={courseSaving || !chapterNameInput.trim()}
+                          onClick={saveChapterToActiveCourse}
+                        >
+                          {courseSaving ? 'שומר…' : 'שמור פרק בקורס'}
+                        </button>
+                      </div>
+                      {!chapterNameInput.trim() && (
+                        <p className="note">יש למלא שם לפרק לפני השמירה.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="actions">
+                  <button type="button" onClick={startAddingAnotherChapter}>
+                    יצירת פרק נוסף בקורס
+                  </button>
+                </div>
+              )}
+
+              {activeCourseChapters.length ? (
+                <div className="course-export-box grid">
+                  <h4>3. ייצוא</h4>
+                  <p className="note">
+                    קובץ JSON אחד עם כל הפרקים והשיעורים — לטעינה בתוסף Schooler.
+                  </p>
+                  <div className="actions">
+                    <button type="button" onClick={() => exportCourseForExtension(activeCourse)}>
+                      ייצא ל-JSON
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {courseLibrary.length > 1 ? (
+                <label>
+                  מעבר לקורס אחר
+                  <select
+                    value={activeCourseId || ''}
+                    onChange={(e) => selectExistingCourse(e.target.value)}
+                  >
+                    {courseLibrary.map((course) => (
+                      <option key={course.id} value={course.id}>
+                        {course.name} ({normalizeBundleChapters(course).length} פרקים)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </section>
+          )}
+
+          {playlistResult?.videos?.length ? (
+            <section className="playlist-results course-player-box">
+              {activeEpisode && (
+                <section className="course-player">
+                  <h3>{getEpisodeTitle(activeEpisode)}</h3>
+                  <PlyrPlayer
+                    videoId={activeEpisode.videoId}
+                    title={activeEpisode.title}
+                    episodeIndex={activeEpisode.index}
+                    autoPlay={false}
+                    showCaptions={subtitleSettings.showInPlayer}
+                    captionLang={subtitleSettings.playerLang}
+                    sourceLang={subtitleSettings.sourceLang}
+                    targetLang={subtitleSettings.targetLang}
+                    format={subtitleSettings.format}
+                    onCaptionStatusChange={setLiveCaptionStatus}
+                  />
+                  <ul className="episode-list">
+                    {playlistResult.videos.map((video, index) => (
+                      <li
+                        key={video.videoId}
+                        className={index === activeEpisodeIndex ? 'episode-item active' : 'episode-item'}
+                      >
+                        <button
+                          type="button"
+                          className="episode-play"
+                          onClick={() => setActiveEpisodeIndex(index)}
+                        >
+                          {getEpisodeTitle(video, index + 1)}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </section>
+          ) : null}
 
           <section className="settings-box grid">
             <h3>הגדרות כתוביות</h3>
@@ -677,290 +986,17 @@ function App() {
             {playlistResult?.videos?.length ? (
               <div className="actions">
                 <button type="button" disabled={subtitleLoading} onClick={downloadCurrentSubtitle}>
-                  הורד כתוביות לפרק הנוכחי
+                  הורד כתוביות לשיעור הנוכחי
                 </button>
                 <button type="button" disabled={subtitleLoading} onClick={downloadAllSubtitles}>
                   הורד כתוביות לכל הפלייליסט
                 </button>
               </div>
             ) : null}
-            {subtitleStatus && <p className="note">{subtitleStatus}</p>}
             {liveCaptionStatus?.message && (
               <p className={`note caption-live-status caption-live-status--${liveCaptionStatus.state}`}>
                 מעקב נגן: {liveCaptionStatus.message}
               </p>
-            )}
-            <p className="note">
-              כתוביות, מהירות ואיכות וידאו נמצאים בתפריט ההגדרות (⚙) של הנגן.
-            </p>
-          </section>
-
-          <form onSubmit={extractPlaylist} className="grid playlist-box">
-            <label>
-              קישור פלייליסט מהערוץ שלך
-              <input
-                placeholder="https://www.youtube.com/playlist?list=..."
-                value={playlistUrl}
-                onChange={(e) => setPlaylistUrl(e.target.value)}
-                required
-              />
-            </label>
-            <button type="submit" disabled={playlistLoading}>
-              {playlistLoading ? 'מחלץ פרקים...' : 'חלץ פלייליסט והצג בנגן Plyr'}
-            </button>
-            {playlistError && <p className="error">{playlistError}</p>}
-            {copiedText && <p className="ok">{copiedText}</p>}
-            {playlistResult?.videos?.length ? (
-              <section className="settings-box grid course-save-box">
-                <h3>שמירה כפרק בקורס</h3>
-                <p className="note">
-                  כל פלייליסט = פרק אחד. אפשר לבנות קורס עם כמה פרקים ואז לייצא JSON אחד לתוסף.
-                </p>
-                <label>
-                  שם הפרק
-                  <input
-                    placeholder={playlistResult.title || 'לדוגמה: מבוא לבינה מלאכותית'}
-                    value={chapterNameInput}
-                    onChange={(e) => setChapterNameInput(e.target.value)}
-                  />
-                </label>
-                <label>
-                  שם הקורס (חבילת פרקים)
-                  <input
-                    placeholder={
-                      activeCourse?.name || 'לדוגמה: קורס בינה מלאכותית מלא'
-                    }
-                    value={courseNameInput}
-                    onChange={(e) => setCourseNameInput(e.target.value)}
-                  />
-                </label>
-                {courseLibrary.length ? (
-                  <label>
-                    קורס קיים להוספת הפרק
-                    <select
-                      value={activeCourseId || ''}
-                      onChange={(e) => setActiveCourseId(e.target.value || null)}
-                    >
-                      <option value="">— בחר קורס —</option>
-                      {courseLibrary.map((course) => (
-                        <option key={course.id} value={course.id}>
-                          {course.name} ({normalizeBundleChapters(course).length} פרקים)
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                <div className="actions">
-                  <button type="button" onClick={() => savePlaylistAsChapter({ asNewBundle: true })}>
-                    צור קורס חדש עם הפרק הזה
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!activeCourse}
-                    onClick={() => savePlaylistAsChapter({ asNewBundle: false })}
-                  >
-                    הוסף פרק לקורס הנבחר
-                  </button>
-                </div>
-                <p className="note">
-                  אם אותו פלייליסט כבר קיים בקורס — הפרק יעודכן במקום ליצור כפילות.
-                </p>
-              </section>
-            ) : null}
-            {playlistResult?.videos?.length ? (
-              <div className="playlist-results">
-                <div className="row">
-                  <p>
-                    נמצאו {playlistResult.total} פרקים בפלייליסט {playlistResult.playlistId}
-                  </p>
-                </div>
-
-                {activeEpisode && (
-                  <section className="course-player">
-                    <h3>{getEpisodeTitle(activeEpisode)}</h3>
-                    <PlyrPlayer
-                      videoId={activeEpisode.videoId}
-                      title={activeEpisode.title}
-                      episodeIndex={activeEpisode.index}
-              autoPlay={false}
-                      showCaptions={subtitleSettings.showInPlayer}
-                      captionLang={subtitleSettings.playerLang}
-                      sourceLang={subtitleSettings.sourceLang}
-                      targetLang={subtitleSettings.targetLang}
-                      format={subtitleSettings.format}
-                      onCaptionStatusChange={setLiveCaptionStatus}
-                    />
-                    <div className="actions">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          copyText(
-                            buildHostedEmbedUrl(activeEpisode.videoId, appOrigin),
-                            `קישור הטמעה לדף לימודים · פרק ${activeEpisode.index}`,
-                          )
-                        }
-                      >
-                        העתק קישור הטמעה לדף לימודים (פרק נוכחי)
-                      </button>
-                    </div>
-                  </section>
-                )}
-
-                <p className="note">
-                  הדבק בשדה ההטמעה של Schooler את קישור ההטמעה (ולא קוד iframe מלא).
-                </p>
-
-                <ul className="episode-list">
-                  {playlistResult.videos.map((video, index) => (
-                    <li
-                      key={video.videoId}
-                      className={index === activeEpisodeIndex ? 'episode-item active' : 'episode-item'}
-                    >
-                      <button
-                        type="button"
-                        className="episode-play"
-                        onClick={() => setActiveEpisodeIndex(index)}
-                      >
-                        {getEpisodeTitle(video, index + 1)}
-                      </button>
-                      <p className="episode-file">
-                        קובץ: {video.fileName}.{subtitleSettings.format}
-                      </p>
-                      <div className="actions">
-                        <button
-                          type="button"
-                          disabled={subtitleLoading}
-                          onClick={async () => {
-                            setSubtitleLoading(true)
-                            setSubtitleStatus('')
-                            try {
-                              const result = await downloadSubtitleForVideo(video)
-                              setSubtitleStatus(result.status?.message || `הורדה הושלמה: ${result.fileName}`)
-                            } catch (error) {
-                              setSubtitleStatus(error.message)
-                            } finally {
-                              setSubtitleLoading(false)
-                            }
-                          }}
-                        >
-                          הורד כתוביות
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-          </form>
-
-          <section className="settings-box grid course-library-box">
-            <h3>ספריית קורסים במערכת שלנו</h3>
-            {!courseLibrary.length ? (
-              <p className="note">
-                עדיין אין קורסים שמורים. חלץ פלייליסט, תן שם לפרק ושמור אותו כקורס חדש או הוסף לקורס קיים.
-              </p>
-            ) : (
-              <>
-                <div className="course-library-list">
-                  {courseLibrary.map((course) => {
-                    const chapters = normalizeBundleChapters(course)
-                    const lessonCount = countBundleLessons(course)
-                    return (
-                      <div
-                        key={course.id}
-                        className={`course-library-item ${course.id === activeCourseId ? 'active' : ''}`}
-                      >
-                        <div>
-                          <strong>{course.name}</strong>
-                          <p className="note">
-                            {chapters.length} פרקים · {lessonCount} שיעורים · מזהה: {course.id}
-                          </p>
-                        </div>
-                        <div className="actions">
-                          <button type="button" onClick={() => loadCourseIntoPlayer(course)}>
-                            טען פרק ראשון לנגן
-                          </button>
-                          <button type="button" onClick={() => setActiveCourseId(course.id)}>
-                            נהל פרקים
-                          </button>
-                          <button type="button" onClick={() => exportCourseForExtension(course)}>
-                            ייצא לתוסף Schooler
-                          </button>
-                          <button type="button" onClick={() => deleteCourse(course.id)}>
-                            מחק קורס
-                          </button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {activeCourseChapters.length ? (
-                  <div className="course-links-grid">
-                    <h4>פרקים בקורס · {activeCourse.name}</h4>
-                    <p className="note">
-                      ייצוא JSON אחד כולל את כל הפרקים. בתוסף: לכל פרק נוצר «פרק חדש» ב-Schooler ואז השיעורים שבו.
-                    </p>
-                    <div className="actions">
-                      <button type="button" onClick={() => exportCourseForExtension(activeCourse)}>
-                        ייצא לתוסף Schooler
-                      </button>
-                    </div>
-                    <ul className="chapter-list">
-                      {activeCourseChapters.map((chapter, chapterIndex) => (
-                        <li key={chapter.id} className="chapter-item">
-                          <div className="chapter-item-head">
-                            <strong>
-                              פרק {chapterIndex + 1}: {chapter.name}
-                            </strong>
-                            <p className="note">{chapter.videos?.length || 0} שיעורים</p>
-                          </div>
-                          <div className="actions">
-                            <button
-                              type="button"
-                              onClick={() => loadCourseIntoPlayer(activeCourse, chapter)}
-                            >
-                              טען לנגן
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeChapterFromCourse(activeCourse, chapter.id)}
-                            >
-                              הסר פרק
-                            </button>
-                          </div>
-                          <ul className="episode-list">
-                            {(chapter.videos || []).map((video) => (
-                              <li
-                                key={`${chapter.id}-${video.videoId}`}
-                                className="episode-item"
-                              >
-                                <p>{getEpisodeTitle(video)}</p>
-                                <div className="actions">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      copyText(
-                                        buildHostedEmbedUrl(video.videoId, appOrigin),
-                                        `קישור הטמעה קבוע · ${getEpisodeTitle(video)}`,
-                                      )
-                                    }
-                                  >
-                                    העתק קישור הטמעה
-                                  </button>
-                                </div>
-                                <code className="code-line">
-                                  {buildHostedEmbedUrl(video.videoId, appOrigin)}
-                                </code>
-                              </li>
-                            ))}
-                          </ul>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </>
             )}
           </section>
           </section>

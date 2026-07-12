@@ -239,6 +239,64 @@ pre {
   margin-top: 0.5rem;
 }
 
+.course-builder-step {
+  margin-top: 0.75rem;
+}
+
+.course-builder-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.course-builder-head h3 {
+  margin: 0 0 0.25rem;
+}
+
+.chapter-add-form,
+.course-export-box,
+.course-chapters-preview,
+.chapter-draft-preview {
+  display: grid;
+  gap: 0.7rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #27324d;
+}
+
+.chapter-add-form h4,
+.course-export-box h4,
+.course-chapters-preview h4,
+.chapter-draft-preview h4 {
+  margin: 0;
+}
+
+.lesson-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+  background: #07101f;
+  border: 1px solid #27324d;
+  border-radius: 8px;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 0.9rem;
+  color: #c9d6f5;
+}
+
+.ghost-btn {
+  background: transparent !important;
+  border: 1px solid #3d4d73 !important;
+  color: #9eb0df !important;
+}
+
+.course-player-box {
+  margin-top: 1rem;
+}
+
 .course-library-box {
   margin-top: 1rem;
 }
