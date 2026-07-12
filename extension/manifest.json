@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Schooler Lesson Importer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ייבוא שיעורים עם שמות וקישורי הטמעה לדף עריכת קורס ב-Schooler",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["https://my.schooler.biz/*"],

@@ -38,7 +38,7 @@
   "lessons": [
     {
       "order": 1,
-      "title": "פרק 1: שם השיעור",
+      "title": "שם הסרטון המקורי מיוטיוב",
       "videoId": "7yA0YU7tVFY",
       "embedUrl": "https://schooler-z7x3.onrender.com/embed/7yA0YU7tVFY"
     }

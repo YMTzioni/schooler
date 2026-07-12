@@ -23,13 +23,25 @@
 
   const click = (element) => {
     if (!element) return false
-    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
-    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
-    element.click()
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }))
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }))
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    if (typeof element.click === 'function') element.click()
     return true
   }
 
-  const waitFor = async (getter, { timeout = 15000, interval = 200 } = {}) => {
+  const isUnsafeClickTarget = (el) => {
+    if (!el) return true
+    if (el.closest('#schooler-importer-panel')) return true
+    if (el.closest('.tox, .mce-tinymce, .tox-tinymce, [id*="tinymce"], .mce-content-body')) return true
+    if (el.closest('iframe')) return true
+    // Avoid accidental TOC navigation while hunting content-type UI
+    if (el.closest('li.toc-item') && !el.closest(SELECTORS.createLessonBtn)) return true
+    return false
+  }
+
+  const waitFor = async (getter, { timeout = 20000, interval = 250, label = 'אלמנט' } = {}) => {
     const started = Date.now()
     while (Date.now() - started < timeout) {
       if (state.stopRequested) throw new Error('הייבוא נעצר')
@@ -37,7 +49,7 @@
       if (value) return value
       await sleep(interval)
     }
-    throw new Error('המתנה לזמן ארוך מדי')
+    throw new Error(`המתנה לזמן ארוך מדי: ${label}`)
   }
 
   const ensurePanel = () => {
@@ -59,7 +71,7 @@
         z-index: 999999;
         left: 16px;
         bottom: 16px;
-        width: 280px;
+        width: 300px;
         background: #101727;
         color: #e8eefc;
         border: 1px solid #3d4d73;
@@ -71,7 +83,7 @@
       }
       #schooler-importer-panel .sip-title { font-weight: bold; margin-bottom: 6px; }
       #schooler-importer-panel .sip-progress { font-size: 18px; margin-bottom: 4px; }
-      #schooler-importer-panel .sip-message { font-size: 12px; min-height: 34px; color: #a7b8e6; white-space: pre-wrap; }
+      #schooler-importer-panel .sip-message { font-size: 12px; min-height: 40px; color: #a7b8e6; white-space: pre-wrap; }
       #schooler-importer-panel button {
         margin-top: 8px;
         background: #c23b3b;
@@ -101,29 +113,52 @@
   }
 
   const getCreateButton = () => qs(SELECTORS.createLessonBtn)
-
   const getTocItems = () => qsa(SELECTORS.tocItem)
-
   const getActiveLessonItem = () => qs(SELECTORS.activeTocItem) || getTocItems().at(-1) || null
+
+  const getLessonHref = (item) => {
+    const link = item?.querySelector?.('a[href*="/edit"]')
+    return link?.getAttribute('href') || ''
+  }
 
   const getLessonNameTarget = (item) => {
     if (!item) return null
-    return (
-      qs('.lesson-item .lesson.caption, .lesson-item .colored-item, .lesson-item a, .lesson-item span', item) ||
-      qs('.lesson-item', item)
+    return qs(SELECTORS.lessonNameInItem, item) || qs('.lesson-item', item)
+  }
+
+  const waitForLessonStable = async (beforeCount, beforeUrl) => {
+    await waitFor(() => getTocItems().length > beforeCount, {
+      timeout: 25000,
+      label: 'שיעור חדש בתוכן העניינים',
+    })
+
+    // Schooler briefly creates lessons without lesson_id — wait for URL / href to settle.
+    await waitFor(
+      () => {
+        const active = getActiveLessonItem()
+        if (!active) return null
+        const href = getLessonHref(active)
+        const urlChanged = window.location.href !== beforeUrl && /\/edit\/?$/.test(window.location.pathname)
+        const hasEditHref = Boolean(href && href.includes('/edit'))
+        const nameEl = getLessonNameTarget(active)
+        const hasName = Boolean(nameEl && (nameEl.textContent || '').trim())
+        return (urlChanged || hasEditHref) && hasName ? active : null
+      },
+      { timeout: 25000, label: 'יציבות שיעור חדש (lesson_id/URL)' },
     )
+
+    // Extra settle time for Redux sync / TinyMCE init race
+    await sleep(1800)
+    return getActiveLessonItem()
   }
 
   const createNewLesson = async () => {
     const before = getTocItems().length
+    const beforeUrl = window.location.href
     const btn = getCreateButton()
     if (!btn) throw new Error('לא נמצא כפתור "שיעור חדש"')
     click(btn)
-    await waitFor(() => getTocItems().length > before || qs(SELECTORS.activeTocItem), {
-      timeout: 20000,
-    })
-    await sleep(700)
-    return getActiveLessonItem()
+    return waitForLessonStable(before, beforeUrl)
   }
 
   const renameActiveLesson = async (title) => {
@@ -131,102 +166,135 @@
     const target = getLessonNameTarget(item)
     if (!target) throw new Error('לא נמצא שם שיעור לשינוי')
 
+    // Prefer focusing active lesson first with a single click
+    click(target)
+    await sleep(300)
     target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }))
-    await sleep(250)
+    await sleep(400)
 
-    const input = await waitFor(() => qs(SELECTORS.renameInput, item) || qs(SELECTORS.renameInput), {
-      timeout: 8000,
+    const input = await waitFor(() => qs(SELECTORS.renameInput) || qs('input, textarea', item), {
+      timeout: 10000,
+      label: 'שדה שינוי שם',
     })
     input.focus()
     setNativeValue(input, title)
-    await sleep(120)
+    await sleep(200)
     input.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
+    )
+    input.dispatchEvent(
+      new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
     )
     input.dispatchEvent(
       new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }),
     )
     input.blur()
-    await sleep(500)
+    await sleep(900)
+
+    await waitFor(
+      () => {
+        const active = getActiveLessonItem()
+        const text = (getLessonNameTarget(active)?.textContent || '').trim()
+        return text.includes(title.slice(0, Math.min(12, title.length))) ? active : null
+      },
+      { timeout: 8000, label: 'אישור שם שיעור' },
+    ).catch(() => null)
+  }
+
+  const contentTypePopupVisible = () =>
+    qs(SELECTORS.radioWww) ||
+    qs(SELECTORS.contentTypePopup) ||
+    (qs(SELECTORS.popup) && (qs(SELECTORS.popup)?.textContent || '').includes('אתר מוטמע'))
+
+  const findByExactTexts = (texts) => {
+    const nodes = qsa('button, a, span, div, label')
+    return nodes.filter((el) => {
+      if (isUnsafeClickTarget(el)) return false
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim()
+      if (!text || text.length > 40) return false
+      return texts.some((t) => text === t || text.includes(t))
+    })
   }
 
   const openContentTypePopup = async () => {
-    if (qs(SELECTORS.radioWww) || qs(`${SELECTORS.popup} ${SELECTORS.popupTextarea}`)) {
-      return true
-    }
+    if (contentTypePopupVisible()) return true
 
-    const candidates = [
-      ...qsa('button, a, div, span').filter((el) => {
-        const text = (el.textContent || '').trim()
-        return (
-          text.includes('סוג תוכן') ||
-          text.includes('בחר תוכן') ||
-          text.includes('הוסף תוכן') ||
-          text.includes('ערוך תוכן') ||
-          text.includes('אתר מוטמע') ||
-          text.includes('תוכן השיעור')
-        )
-      }),
-      ...qsa(SELECTORS.contentTypeTrigger),
-      ...qsa('.edit-lesson-root .nm-btn'),
-      ...qsa('[class*="lesson-edit"]'),
-      ...qsa('img[src*="lesson-edit"], .lesson-edit-icon, [class*="edit-icon"]'),
-    ]
+    const textCandidates = findByExactTexts([
+      'סוג תוכן',
+      'בחר תוכן',
+      'הוסף תוכן',
+      'ערוך תוכן',
+      'שנה תוכן',
+      'אתר מוטמע',
+      'בחר סוג תוכן',
+    ])
 
-    for (const el of candidates) {
-      if (!el || el.closest('#schooler-importer-panel')) continue
+    const selectorCandidates = qsa(SELECTORS.contentTypeTriggers).filter((el) => !isUnsafeClickTarget(el))
+
+    const ordered = [...textCandidates, ...selectorCandidates]
+    for (const el of ordered) {
       click(el)
-      await sleep(400)
-      if (qs(SELECTORS.radioWww) || qs(SELECTORS.popup)) return true
+      await sleep(600)
+      if (contentTypePopupVisible()) return true
     }
 
-    // Fallback: try clicking main content area empty states
-    const mainArea = qs('.edit-lesson-root .content, .lesson-body, .main-content, .wrapper.edit-lesson-root')
-    if (mainArea) {
-      click(mainArea)
-      await sleep(400)
-      if (qs(SELECTORS.radioWww) || qs(SELECTORS.popup)) return true
+    // Empty-state placeholders in the main lesson pane (not TinyMCE)
+    const emptyStates = qsa(
+      '.edit-lesson-root .content-placeholder, .edit-lesson-root .empty-state, .edit-lesson-root [class*="placeholder"]',
+    ).filter((el) => !isUnsafeClickTarget(el))
+    for (const el of emptyStates) {
+      click(el)
+      await sleep(600)
+      if (contentTypePopupVisible()) return true
     }
 
-    throw new Error('לא הצלחתי לפתוח את חלון בחירת סוג התוכן')
+    throw new Error('לא הצלחתי לפתוח את חלון בחירת סוג התוכן (נמנע מלחיצות על TinyMCE)')
   }
 
   const selectWwwAndFillEmbed = async (embedUrl) => {
     await openContentTypePopup()
 
-    const radio = await waitFor(() => qs(SELECTORS.radioWww), { timeout: 10000 }).catch(() => null)
+    const radio = await waitFor(() => qs(SELECTORS.radioWww), {
+      timeout: 12000,
+      label: 'רדיו אתר מוטמע',
+    }).catch(() => null)
+
     if (radio) {
       click(radio)
       const label = qs(SELECTORS.radioWwwLabel)
       if (label) click(label)
-      await sleep(350)
+      await sleep(500)
     } else {
-      const wwwLabel = qsa('label, div, span').find((el) => (el.textContent || '').includes('אתר מוטמע'))
-      if (wwwLabel) {
-        click(wwwLabel)
-        await sleep(350)
-      } else {
-        throw new Error('לא נמצאה אפשרות "אתר מוטמע"')
-      }
+      const wwwLabel = findByExactTexts(['אתר מוטמע'])[0]
+      if (!wwwLabel) throw new Error('לא נמצאה אפשרות "אתר מוטמע"')
+      click(wwwLabel)
+      await sleep(500)
     }
 
-    const textarea = await waitFor(() => qs(SELECTORS.popupTextarea) || qs('textarea.nm-textarea') || qs('.popup textarea'), {
-      timeout: 10000,
-    })
+    const textarea = await waitFor(
+      () => qs(SELECTORS.popupTextarea) || qs('.popup textarea') || qs('textarea.nm-textarea'),
+      { timeout: 12000, label: 'שדה קישור הטמעה' },
+    )
     textarea.focus()
     setNativeValue(textarea, embedUrl)
-    await sleep(200)
+    await sleep(300)
 
     const submit =
       qs(SELECTORS.popupSubmit) ||
-      qsa('input, button').find((el) => {
+      qsa('.popup input, .popup button').find((el) => {
         const text = `${el.value || ''} ${el.textContent || ''}`.trim()
         return text.includes('שמור') || text.includes('אישור') || el.type === 'submit'
       })
 
     if (!submit) throw new Error('לא נמצא כפתור שמירה בפופאפ')
     click(submit)
-    await sleep(900)
+
+    await waitFor(() => !contentTypePopupVisible(), {
+      timeout: 15000,
+      label: 'סגירת פופאפ אחרי שמירה',
+    }).catch(() => null)
+
+    await sleep(1200)
   }
 
   const importLesson = async (lesson) => {
@@ -239,12 +307,8 @@
   }
 
   const startImport = async ({ payload, startFrom = 1 }) => {
-    if (state.running) {
-      return { ok: false, error: 'ייבוא כבר רץ' }
-    }
-    if (!payload?.lessons?.length) {
-      return { ok: false, error: 'אין שיעורים לייבוא' }
-    }
+    if (state.running) return { ok: false, error: 'ייבוא כבר רץ' }
+    if (!payload?.lessons?.length) return { ok: false, error: 'אין שיעורים לייבוא' }
     if (!getCreateButton()) {
       return { ok: false, error: 'לא בדף עריכת קורס של Schooler (חסר כפתור שיעור חדש)' }
     }
@@ -273,7 +337,7 @@
           updatePanel(`שגיאה בשיעור ${lesson.order}: ${lesson.title}`)
           throw error
         }
-        await sleep(600)
+        await sleep(1200)
       }
 
       if (state.stopRequested) {
@@ -293,17 +357,12 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const handle = async () => {
       if (message?.type === 'START_IMPORT') {
-        if (state.running) {
-          return { ok: false, error: 'ייבוא כבר רץ' }
-        }
-        if (!message.payload?.lessons?.length) {
-          return { ok: false, error: 'אין שיעורים לייבוא' }
-        }
+        if (state.running) return { ok: false, error: 'ייבוא כבר רץ' }
+        if (!message.payload?.lessons?.length) return { ok: false, error: 'אין שיעורים לייבוא' }
         if (!getCreateButton()) {
           return { ok: false, error: 'לא בדף עריכת קורס של Schooler (חסר כפתור שיעור חדש)' }
         }
 
-        // Long-running import continues after the response.
         startImport({ payload: message.payload, startFrom: message.startFrom || 1 }).then((result) => {
           if (!result.ok) updatePanel(result.error || 'ייבוא נכשל')
         })

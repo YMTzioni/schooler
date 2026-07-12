@@ -4,7 +4,7 @@ export const buildSchoolerImportPayload = (course, origin = null) => {
   const videos = Array.isArray(course?.videos) ? course.videos : []
   const lessons = videos.map((video, index) => {
     const order = Number(video.index) || index + 1
-    const title = video.displayName || `פרק ${order}: ${video.title || `שיעור ${order}`}`
+    const title = String(video.title || '').trim() || `שיעור ${order}`
     return {
       order,
       title,
