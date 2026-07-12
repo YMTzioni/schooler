@@ -936,8 +936,8 @@ const buildEmbedPayload = (video, index) => {
     index: episodeIndex,
     title: youtubeTitle,
     youtubeTitle,
-    displayName,
-    fileName: sanitizeFileName(displayName),
+    displayName: youtubeTitle,
+    fileName: sanitizeFileName(formatEpisodeName(episodeIndex, youtubeTitle)),
     videoId: video.videoId,
     embedUrl,
     embedCode,
@@ -1450,6 +1450,29 @@ app.post('/api/youtube/extract-playlist', async (req, res) => {
       videos,
       note: 'השתמש בקוד המוגן ל-Schooler. חסימה מלאה של יוטיוב אינה אפשרית רשמית, אבל המצב המוגן חוסם לחיצות על לוגו/קישורים נפוצים.',
     })
+  } catch (error) {
+    return handleApiError(res, error)
+  }
+})
+
+app.post('/api/youtube/resolve-titles', async (req, res) => {
+  try {
+    const videoIds = Array.isArray(req.body?.videoIds)
+      ? req.body.videoIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : []
+    if (!videoIds.length) {
+      return res.status(400).json({ message: 'חסרים מזהי סרטונים' })
+    }
+
+    const uniqueIds = [...new Set(videoIds)]
+    const resolved = await Promise.all(
+      uniqueIds.map(async (videoId) => {
+        const title = await fetchYoutubeOEmbedTitle(videoId)
+        return [videoId, title]
+      }),
+    )
+    const titles = Object.fromEntries(resolved.filter(([, title]) => Boolean(title)))
+    return res.json({ titles, total: uniqueIds.length, resolved: Object.keys(titles).length })
   } catch (error) {
     return handleApiError(res, error)
   }

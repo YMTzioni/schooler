@@ -7,6 +7,8 @@ import {
 import {
   buildSchoolerImportFileName,
   buildSchoolerImportPayload,
+  resolveYoutubeLessonTitle,
+  sortLessonsByAscendingNumber,
 } from './utils/courseExport.js'
 import { downloadTextFile } from './utils/downloads.js'
 import {
@@ -141,6 +143,69 @@ function App() {
     }
   }
 
+  const getEpisodeTitle = (video, fallbackIndex = 1) =>
+    resolveYoutubeLessonTitle(video, Number(video?.index) || fallbackIndex)
+
+  const isGenericEpisodeTitle = (title) => /^פרק\s*\d+$/u.test(String(title || '').trim())
+
+  const refreshVideosTitles = async (videos) => {
+    if (!Array.isArray(videos) || !videos.length) return videos
+    const needsRefresh = videos.some(
+      (video) => !video?.title || isGenericEpisodeTitle(video.title),
+    )
+    if (!needsRefresh) {
+      // Still re-number/sort by title numbers for display consistency
+      return sortLessonsByAscendingNumber(
+        videos.map((video, index) => ({
+          ...video,
+          order: Number(video.index) || index + 1,
+          title: getEpisodeTitle(video, index + 1),
+        })),
+      ).map((lesson, index) => {
+        const source = videos.find((video) => video.videoId === lesson.videoId) || videos[index]
+        return {
+          ...source,
+          index: index + 1,
+          title: lesson.title,
+          youtubeTitle: lesson.title,
+          displayName: lesson.title,
+        }
+      })
+    }
+
+    const data = await apiRequest('/youtube/resolve-titles', {
+      method: 'POST',
+      body: JSON.stringify({ videoIds: videos.map((video) => video.videoId) }),
+    })
+    const titles = data.titles || {}
+    const withTitles = videos.map((video, index) => {
+      const resolved = titles[video.videoId] || getEpisodeTitle(video, index + 1)
+      return {
+        ...video,
+        title: resolved,
+        youtubeTitle: resolved,
+        displayName: resolved,
+      }
+    })
+
+    return sortLessonsByAscendingNumber(
+      withTitles.map((video, index) => ({
+        ...video,
+        order: Number(video.index) || index + 1,
+        title: video.title,
+      })),
+    ).map((lesson, index) => {
+      const source = withTitles.find((video) => video.videoId === lesson.videoId) || withTitles[index]
+      return {
+        ...source,
+        index: index + 1,
+        title: lesson.title,
+        youtubeTitle: lesson.title,
+        displayName: lesson.title,
+      }
+    })
+  }
+
   const extractPlaylist = async (event) => {
     event.preventDefault()
     setPlaylistLoading(true)
@@ -151,7 +216,8 @@ function App() {
         method: 'POST',
         body: JSON.stringify({ playlistUrl }),
       })
-      setPlaylistResult(data)
+      const videos = await refreshVideosTitles(data.videos || [])
+      setPlaylistResult({ ...data, videos, total: videos.length })
       setActiveEpisodeIndex(0)
     } catch (error) {
       setPlaylistError(error.message)
@@ -269,8 +335,8 @@ function App() {
       id: courseId,
       name: normalizedName || 'קורס חדש',
       playlistId: playlistResult.playlistId || null,
-      total: playlistResult.total || playlistResult.videos.length,
-      videos: playlistResult.videos,
+      total: playlistResult.videos.length,
+      videos: await refreshVideosTitles(playlistResult.videos),
     }
     try {
       const data = await apiRequest('/library/courses', {
@@ -292,15 +358,32 @@ function App() {
     }
   }
 
-  const loadCourseIntoPlayer = (course) => {
-    setPlaylistResult({
-      playlistId: course.playlistId || course.id,
-      total: course.total || course.videos?.length || 0,
-      videos: course.videos || [],
-      title: course.name,
-    })
-    setActiveEpisodeIndex(0)
-    setActiveCourseId(course.id)
+  const loadCourseIntoPlayer = async (course) => {
+    try {
+      const videos = await refreshVideosTitles(course.videos || [])
+      setPlaylistResult({
+        playlistId: course.playlistId || course.id,
+        total: videos.length,
+        videos,
+        title: course.name,
+      })
+      setActiveEpisodeIndex(0)
+      setActiveCourseId(course.id)
+
+      const titlesChanged = videos.some((video, index) => video.title !== course.videos?.[index]?.title)
+      if (titlesChanged) {
+        const nextCourse = { ...course, videos, total: videos.length }
+        await apiRequest('/library/courses', {
+          method: 'POST',
+          body: JSON.stringify(nextCourse),
+        })
+        setCourseLibrary((current) =>
+          current.map((item) => (item.id === course.id ? { ...item, ...nextCourse } : item)),
+        )
+      }
+    } catch (error) {
+      setSubtitleStatus(error.message)
+    }
   }
 
   const deleteCourse = async (courseId) => {
@@ -312,12 +395,22 @@ function App() {
     }
   }
 
-  const exportCourseForExtension = (course) => {
+  const exportCourseForExtension = async (course) => {
     if (!course?.videos?.length) return
-    const payload = buildSchoolerImportPayload(course, appOrigin)
-    downloadTextFile(JSON.stringify(payload, null, 2), buildSchoolerImportFileName(course))
-    setCopiedText(`יוצא JSON לתוסף · ${payload.lessons.length} שיעורים`)
-    setTimeout(() => setCopiedText(''), 2500)
+    try {
+      const videos = await refreshVideosTitles(course.videos)
+      const payload = buildSchoolerImportPayload({ ...course, videos }, appOrigin)
+      downloadTextFile(JSON.stringify(payload, null, 2), buildSchoolerImportFileName(course))
+      setCopiedText(`יוצא JSON לתוסף · ${payload.lessons.length} שיעורים`)
+      setTimeout(() => setCopiedText(''), 2500)
+      setCourseLibrary((current) =>
+        current.map((item) =>
+          item.id === course.id ? { ...item, videos, total: videos.length } : item,
+        ),
+      )
+    } catch (error) {
+      setSubtitleStatus(error.message)
+    }
   }
 
   if (hostedPlayerVideoId) {
@@ -550,7 +643,7 @@ function App() {
 
                 {activeEpisode && (
                   <section className="course-player">
-                    <h3>{activeEpisode.displayName || `פרק ${activeEpisode.index}: ${activeEpisode.title}`}</h3>
+                    <h3>{getEpisodeTitle(activeEpisode)}</h3>
                     <PlyrPlayer
                       videoId={activeEpisode.videoId}
                       title={activeEpisode.title}
@@ -594,7 +687,7 @@ function App() {
                         className="episode-play"
                         onClick={() => setActiveEpisodeIndex(index)}
                       >
-                        {video.displayName || `פרק ${video.index}: ${video.title}`}
+                        {getEpisodeTitle(video, index + 1)}
                       </button>
                       <p className="episode-file">
                         קובץ: {video.fileName}.{subtitleSettings.format}
@@ -676,14 +769,14 @@ function App() {
                     <ul className="episode-list">
                       {activeCourse.videos.map((video) => (
                         <li key={`${activeCourse.id}-${video.videoId}`} className="episode-item">
-                          <p>{video.displayName || `פרק ${video.index}: ${video.title}`}</p>
+                          <p>{getEpisodeTitle(video)}</p>
                           <div className="actions">
                             <button
                               type="button"
                               onClick={() =>
                                 copyText(
                                   buildHostedEmbedUrl(video.videoId, appOrigin),
-                                  `קישור הטמעה קבוע · ${video.displayName || video.title}`,
+                                  `קישור הטמעה קבוע · ${getEpisodeTitle(video)}`,
                                 )
                               }
                             >
