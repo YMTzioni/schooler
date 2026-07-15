@@ -4,6 +4,7 @@ services:
     runtime: node
     plan: starter
     region: frankfurt
+    # build runs build:embed then vite — serves public/schooler-player-overlay.js from dist/
     buildCommand: npm install --include=dev && npm run build
     startCommand: npm run start:prod
     healthCheckPath: /api/health

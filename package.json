@@ -10,8 +10,10 @@
     "api": "node server.js",
     "start": "npm run dev",
     "start:prod": "node server.js",
-    "build": "vite build",
-    "vercel-build": "vite build",
+    "build": "npm run build:embed && vite build",
+    "build:embed": "node scripts/build-schooler-embed.mjs",
+    "build:mediaelement-poc": "node scripts/build-mediaelement-poc.mjs",
+    "vercel-build": "npm run build",
     "lint": "oxlint",
     "preview": "vite preview",
     "responder:oauth": "node scripts/responder-oauth.mjs",
@@ -33,7 +35,9 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^10.0.3",
+    "esbuild": "^0.25.12",
     "oxlint": "^1.71.0",
+    "typescript": "^5.9.3",
     "vite": "^5.4.19"
   }
 }

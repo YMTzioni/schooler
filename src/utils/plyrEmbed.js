@@ -76,3 +76,39 @@ export const buildHostedEmbedUrl = (videoId, origin = null) => {
   const appOrigin = origin || (typeof window !== 'undefined' ? window.location.origin : '')
   return `${appOrigin}/embed/${videoId}`
 }
+
+export const buildSchoolerOverlayLoaderJs = (origin = null) => {
+  const appOrigin = (
+    origin ||
+    (typeof window !== 'undefined' ? window.location.origin : '') ||
+    'https://schooler-z7x3.onrender.com'
+  ).replace(/\/+$/, '')
+
+  return `<script>
+window.SchoolerPlayerConfig = Object.assign({
+  auto: true
+}, window.SchoolerPlayerConfig || {});
+(function () {
+  if (window.__SchoolerPlayerLoader) return;
+  window.__SchoolerPlayerLoader = true;
+  var s = document.createElement('script');
+  s.src = ${JSON.stringify(`${appOrigin}/schooler-player-overlay.js`)} + '?v=4';
+  s.async = true;
+  (document.head || document.documentElement).appendChild(s);
+})();
+</script>`
+}
+
+export const buildSchoolerPlayerMountHtml = (videoId, origin = null) => {
+  const appOrigin = (
+    origin ||
+    (typeof window !== 'undefined' ? window.location.origin : '') ||
+    'https://schooler-z7x3.onrender.com'
+  ).replace(/\/+$/, '')
+  const id = String(videoId || '').trim()
+  return `<div id="schooler-player" data-video-id="${id}"></div>
+<script>
+  window.SchoolerPlayerConfig = { origin: ${JSON.stringify(appOrigin)}, mode: 'hosted', auto: false };
+</script>
+<script src="${appOrigin}/schooler-player-overlay.js" async></script>`
+}

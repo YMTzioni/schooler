@@ -4,7 +4,8 @@ import axios from 'axios'
 import cookieParser from 'cookie-parser'
 import crypto from 'node:crypto'
 import path from 'node:path'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 import {
@@ -1711,6 +1712,22 @@ app.use('/api', (req, res) => {
 })
 
 if (isProduction && !isVercel) {
+  const overlayJsPath = path.join(distPath, 'schooler-player-overlay.js')
+  app.get('/schooler-player-overlay.js', async (_req, res) => {
+    try {
+      await access(overlayJsPath, fsConstants.R_OK)
+      res.setHeader('Cache-Control', 'public, max-age=120')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.type('application/javascript; charset=utf-8')
+      return res.sendFile(overlayJsPath)
+    } catch {
+      return res
+        .status(404)
+        .type('application/javascript; charset=utf-8')
+        .send('/* schooler-player-overlay.js missing — run npm run build */\n')
+    }
+  })
+
   app.use(express.static(distPath))
   app.get(/^(?!\/api).*/, (_req, res) => {
     res.sendFile(path.join(distPath, 'index.html'))

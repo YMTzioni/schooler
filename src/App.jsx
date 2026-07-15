@@ -10,6 +10,7 @@ import {
   sortLessonsByAscendingNumber,
 } from './utils/courseExport.js'
 import { downloadTextFile } from './utils/downloads.js'
+import { buildSchoolerOverlayLoaderJs } from './utils/plyrEmbed.js'
 import {
   SUBTITLE_SOURCE_LANGUAGES,
   SUBTITLE_TARGET_LANGUAGES,
@@ -862,7 +863,22 @@ function App() {
                     <button type="button" onClick={() => exportCourseForExtension(activeCourse)}>
                       ייצא ל-JSON
                     </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        copyText(
+                          buildSchoolerOverlayLoaderJs(appOrigin),
+                          'קוד JS — שכבת נגן מעל יוטיוב',
+                        )
+                      }
+                    >
+                      העתק קוד JS ל-Schooler (שכבה מעל יוטיוב)
+                    </button>
                   </div>
+                  <p className="note">
+                    את קוד ה־JS מדביקים בשדה JavaScript / שכבה מותאמת ב־Schooler — הוא מחליף
+                    iframe-ים של YouTube בנגן שלנו.
+                  </p>
                 </div>
               ) : null}
 
