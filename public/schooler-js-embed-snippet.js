@@ -36,16 +36,28 @@
       return false;
     }
   };
-  var readTracklist = (embed) => {
+  var isTranslateableTrack = (track) => Boolean(
+    track && (track.is_translateable === true || track.is_translatable === 1 || track.is_translatable === true)
+  );
+  var isServedSourceTrack = (track) => Boolean(track) && (track.is_servable !== false || track.kind === "asr");
+  var getAvailableModules = (embed) => {
     var _a;
-    for (const moduleName of ["captions", "cc"]) {
-      try {
-        const list = (_a = embed.getOption) == null ? void 0 : _a.call(embed, moduleName, "tracklist");
-        if (Array.isArray(list) && list.length) return list;
-      } catch (e) {
-      }
+    try {
+      const options = (_a = embed.getOptions) == null ? void 0 : _a.call(embed);
+      if (!Array.isArray(options)) return [];
+      return options.filter((name) => name === "captions" || name === "cc");
+    } catch (e) {
+      return [];
     }
-    return [];
+  };
+  var readTracklist = (embed, moduleName) => {
+    var _a;
+    try {
+      const list = (_a = embed.getOption) == null ? void 0 : _a.call(embed, moduleName, "tracklist");
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      return [];
+    }
   };
   var readTranslationLanguages = (embed) => {
     var _a;
@@ -56,22 +68,44 @@
       return [];
     }
   };
-  var trackToApiPayload = (track) => {
-    const languageCode = normalizeYoutubeLang(String(track.languageCode || track.lang || "")) || String(track.languageCode || "");
-    const out = { languageCode };
-    const vss = track.vss_id || track.vssId || track.vssID;
-    if (vss) {
-      out.vss_id = String(vss);
-      out.vssId = String(vss);
+  var readBestTracklist = (embed, modules) => {
+    const order = modules.length ? modules : ["captions", "cc"];
+    let best = { moduleName: order[0], tracklist: [] };
+    for (const moduleName of order) {
+      const tracklist = readTracklist(embed, moduleName);
+      if (tracklist.length > best.tracklist.length) {
+        best = { moduleName, tracklist };
+      }
     }
-    if (track.kind !== void 0 && track.kind !== null && track.kind !== "") out.kind = track.kind;
-    if (track.name) out.name = track.name;
-    if (track.languageName) out.languageName = track.languageName;
-    if (track.displayName) out.displayName = track.displayName;
-    return out;
+    return best;
   };
+  var waitForCaptionModules = (embed, timeoutMs = 12e3) => new Promise((resolve) => {
+    var _a;
+    const pick = () => getAvailableModules(embed);
+    const existing = pick();
+    if (existing.length) {
+      resolve(existing);
+      return;
+    }
+    const onApiChange = () => {
+      var _a2;
+      const modules = pick();
+      if (modules.length) {
+        (_a2 = embed.removeEventListener) == null ? void 0 : _a2.call(embed, "onApiChange", onApiChange);
+        window.clearTimeout(timer);
+        resolve(modules);
+      }
+    };
+    (_a = embed.addEventListener) == null ? void 0 : _a.call(embed, "onApiChange", onApiChange);
+    const timer = window.setTimeout(() => {
+      var _a2;
+      (_a2 = embed.removeEventListener) == null ? void 0 : _a2.call(embed, "onApiChange", onApiChange);
+      resolve(pick());
+    }, timeoutMs);
+  });
   var waitForCaptionsCatalog = async (embed, timeoutMs = 6e3) => {
     var _a, _b;
+    const modules = await waitForCaptionModules(embed, Math.min(timeoutMs, 8e3));
     const started = Date.now();
     let tracks = [];
     let translations = [];
@@ -82,7 +116,7 @@
         (_b = embed.loadModule) == null ? void 0 : _b.call(embed, "cc");
       } catch (e) {
       }
-      tracks = readTracklist(embed);
+      tracks = readBestTracklist(embed, modules).tracklist;
       translations = readTranslationLanguages(embed);
       if (tracks.length && !sawTracksAt) sawTracksAt = Date.now();
       const langCodes = new Set(
@@ -99,113 +133,227 @@
       await new Promise((r) => window.setTimeout(r, 200));
     }
     return {
-      tracks: readTracklist(embed),
+      tracks: readBestTracklist(embed, modules).tracklist,
       translations: readTranslationLanguages(embed)
     };
   };
-  var pickSourceLang = (tracks) => {
-    const hebrew = tracks.find((t) => youtubeLangsMatch(String(t.languageCode || ""), "iw"));
-    if (hebrew) return normalizeYoutubeLang(String(hebrew.languageCode));
-    const english = tracks.find((t) => youtubeLangsMatch(String(t.languageCode || ""), "en"));
-    if (english) return normalizeYoutubeLang(String(english.languageCode));
-    const first = tracks[0];
-    return first ? normalizeYoutubeLang(String(first.languageCode || "")) || "iw" : "iw";
-  };
-  var buildTrack = (targetLang, tracks, translations) => {
-    if (!targetLang || targetLang === "none") {
-      const code = pickSourceLang(tracks);
-      const source = tracks.find((t) => youtubeLangsMatch(String(t.languageCode || ""), code));
-      if (source) {
-        return { track: trackToApiPayload(source), mode: "source", translated: false };
-      }
-      return { track: { languageCode: code }, mode: "source", translated: false };
-    }
-    const normalized = normalizeYoutubeLang(targetLang);
-    const direct = tracks.find((t) => youtubeLangsMatch(String(t.languageCode || ""), targetLang));
-    if (direct) {
-      const served = tracks.find(
-        (t) => youtubeLangsMatch(String(t.languageCode || ""), targetLang) && t.is_servable !== false
+  var pickSourceCaptionTrack = (tracks, { sourceLang = "auto" } = {}) => {
+    if (!tracks.length) return null;
+    if (sourceLang && sourceLang !== "auto") {
+      const source = tracks.find(
+        (track) => isServedSourceTrack(track) && youtubeLangsMatch(String(track.languageCode), sourceLang)
       );
-      const payload = trackToApiPayload(served || direct);
-      const translated = direct.is_servable === false;
-      return { track: payload, mode: translated ? "translated" : "source", translated };
+      if (source) return source;
     }
-    const fromTranslations = translations.find(
-      (entry) => youtubeLangsMatch(String(entry.languageCode || entry.lang || ""), targetLang)
+    const hebrew = tracks.find(
+      (track) => isServedSourceTrack(track) && youtubeLangsMatch(String(track.languageCode), "iw")
+    );
+    if (hebrew) return hebrew;
+    const english = tracks.find(
+      (track) => isServedSourceTrack(track) && youtubeLangsMatch(String(track.languageCode), "en")
+    );
+    if (english) return english;
+    return tracks.find(isServedSourceTrack) || tracks[0] || null;
+  };
+  var buildTrackForLanguage = (languageCode, tracklist, translationLanguages) => {
+    const normalized = normalizeYoutubeLang(languageCode);
+    if (!normalized) return null;
+    const matches = tracklist.filter(
+      (track) => youtubeLangsMatch(String(track.languageCode || ""), languageCode)
+    );
+    if (matches.length) {
+      const translateable = matches.find(isTranslateableTrack);
+      if (translateable) return { ...translateable };
+      const virtual = matches.find((track) => track.is_servable === false);
+      if (virtual) return { ...virtual };
+      const served = matches.find((track) => isServedSourceTrack(track));
+      if (served) return { ...served };
+      return { ...matches[0] };
+    }
+    const fromTranslations = translationLanguages.find(
+      (track) => youtubeLangsMatch(String(track.languageCode || track.lang || ""), languageCode)
     );
     if (fromTranslations) {
-      const track = { languageCode: normalized };
-      const vss = fromTranslations.vss_id || fromTranslations.vssId;
-      if (vss) {
-        track.vss_id = String(vss);
-        track.vssId = String(vss);
-      }
-      return { track, mode: "translated", translated: true };
+      const code = normalizeYoutubeLang(String(fromTranslations.languageCode || fromTranslations.lang || "")) || normalized;
+      return {
+        languageCode: code,
+        languageName: fromTranslations.languageName || fromTranslations.displayName || code,
+        displayName: fromTranslations.displayName || fromTranslations.languageName || code,
+        is_translateable: true,
+        is_servable: false,
+        vss_id: String(fromTranslations.vss_id || fromTranslations.vssId || `.${code}`),
+        vssId: String(fromTranslations.vss_id || fromTranslations.vssId || `.${code}`)
+      };
     }
     return {
-      track: { languageCode: normalized },
-      mode: "translated",
-      translated: true
+      languageCode: normalized,
+      vss_id: `.${normalized}`,
+      vssId: `.${normalized}`,
+      is_translateable: true,
+      is_servable: false
     };
   };
-  var applyTrack = (embed, track) => {
-    var _a, _b;
-    let applied = false;
-    for (const moduleName of ["captions", "cc"]) {
+  var pickYouTubeCaptionTrack = (tracks, {
+    targetLang = "none",
+    sourceLang = "auto",
+    translationLanguages = []
+  } = {}) => {
+    const wantsTranslation = Boolean(targetLang && targetLang !== "none");
+    const normalizedTarget = normalizeYoutubeLang(targetLang);
+    const sourceTrack = pickSourceCaptionTrack(tracks, { sourceLang });
+    if (wantsTranslation && normalizedTarget) {
+      const built = buildTrackForLanguage(targetLang, tracks, translationLanguages);
+      if (!built) return null;
+      if (sourceTrack && youtubeLangsMatch(String(built.languageCode), targetLang) && youtubeLangsMatch(String(built.languageCode), String(sourceTrack.languageCode)) && !isTranslateableTrack(built)) {
+        return { track: built, mode: "source-same-language", sourceTrack };
+      }
+      const translatingFromDifferentSource = sourceTrack && !youtubeLangsMatch(String(sourceTrack.languageCode), targetLang);
+      const mode = translatingFromDifferentSource ? isTranslateableTrack(built) || built.is_servable === false ? "translated" : "youtube-translate" : "translated";
+      return { track: built, mode, sourceTrack };
+    }
+    if (sourceTrack) return { track: { ...sourceTrack }, mode: "source", sourceTrack };
+    if (normalizedTarget) {
+      const built = buildTrackForLanguage(targetLang, tracks, translationLanguages);
+      if (built) return { track: built, mode: "fallback", sourceTrack: null };
+    }
+    return null;
+  };
+  var applyCaptionSelection = (embed, moduleName, track) => {
+    var _a, _b, _c;
+    (_a = embed.loadModule) == null ? void 0 : _a.call(embed, moduleName);
+    (_b = embed.setOption) == null ? void 0 : _b.call(embed, moduleName, "track", track);
+    try {
+      (_c = embed.setOption) == null ? void 0 : _c.call(embed, moduleName, "reload", true);
+    } catch (e) {
+    }
+  };
+  var applyCaptionSelectionAcrossModules = (embed, modules, track) => {
+    const order = [.../* @__PURE__ */ new Set([...modules, "captions", "cc"])];
+    for (const moduleName of order) {
       try {
-        (_a = embed.loadModule) == null ? void 0 : _a.call(embed, moduleName);
-        (_b = embed.setOption) == null ? void 0 : _b.call(embed, moduleName, "track", track);
-        applied = true;
+        applyCaptionSelection(embed, moduleName, track);
+        return moduleName;
       } catch (e) {
       }
     }
-    return applied;
+    return null;
+  };
+  var applyTranslatedSelection = (embed, modules, selection) => {
+    if (selection.sourceTrack && (selection.mode === "translated" || selection.mode === "youtube-translate") && !youtubeLangsMatch(String(selection.sourceTrack.languageCode), String(selection.track.languageCode))) {
+      try {
+        applyCaptionSelectionAcrossModules(embed, modules, { ...selection.sourceTrack });
+      } catch (e) {
+      }
+    }
+    const withTranslationMeta = { ...selection.track };
+    if (selection.sourceTrack && !withTranslationMeta.translationLanguage) {
+      const code = normalizeYoutubeLang(String(selection.track.languageCode || ""));
+      if (code) {
+        withTranslationMeta.translationLanguage = {
+          languageCode: code,
+          languageName: selection.track.languageName || selection.track.displayName || code
+        };
+      }
+    }
+    return applyCaptionSelectionAcrossModules(embed, modules, withTranslationMeta) || applyCaptionSelectionAcrossModules(embed, modules, selection.track);
   };
   async function disableYouTubeNativeCaptions(player) {
-    var _a, _b;
+    var _a;
     const embed = getEmbed(player);
     if (!(embed == null ? void 0 : embed.setOption) || !isEmbedApiReady(embed)) return;
     for (const moduleName of ["captions", "cc"]) {
       try {
         (_a = embed.loadModule) == null ? void 0 : _a.call(embed, moduleName);
-        (_b = embed.setOption) == null ? void 0 : _b.call(embed, moduleName, "track", {});
+        embed.setOption(moduleName, "track", {});
       } catch (e) {
       }
     }
   }
-  async function enableNativeYouTubeCaptions(player, { targetLang = "none" } = {}) {
+  async function enableNativeYouTubeCaptions(player, { targetLang = "none", sourceLang = "auto" } = {}) {
+    const wantsTranslation = Boolean(targetLang && targetLang !== "none");
     const embed = getEmbed(player);
     if (!(embed == null ? void 0 : embed.setOption)) {
       return { ok: false, translated: false, track: null, mode: "failed", needsPlayback: true };
     }
     if (!hasYouTubePlaybackStarted(embed)) {
-      return { ok: false, translated: false, track: null, mode: "needs-playback", needsPlayback: true };
+      return {
+        ok: false,
+        translated: false,
+        track: null,
+        mode: "needs-playback",
+        needsPlayback: true
+      };
     }
-    const { tracks, translations } = await waitForCaptionsCatalog(embed, 8e3);
-    const selection = buildTrack(targetLang, tracks, translations);
-    const applied = applyTrack(embed, selection.track);
-    return {
-      ok: applied,
-      translated: selection.translated,
-      track: selection.track,
-      mode: selection.mode,
-      needsPlayback: false
-    };
+    const modules = await waitForCaptionModules(embed, 12e3);
+    if (!modules.length) {
+      return { ok: false, translated: false, track: null, mode: "failed", needsPlayback: false };
+    }
+    const maxAttempts = 24;
+    const delayMs = 250;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const { tracklist } = readBestTracklist(embed, modules);
+        const translationLanguages = readTranslationLanguages(embed);
+        const selection = pickYouTubeCaptionTrack(tracklist, {
+          targetLang,
+          sourceLang,
+          translationLanguages
+        });
+        if (!(selection == null ? void 0 : selection.track)) {
+          if (wantsTranslation && attempt < maxAttempts - 1) {
+            await new Promise((r) => window.setTimeout(r, delayMs));
+            continue;
+          }
+          const languageCode = normalizeYoutubeLang(targetLang !== "none" ? targetLang : sourceLang) || "iw";
+          applyCaptionSelectionAcrossModules(embed, modules, {
+            languageCode,
+            vss_id: `.${languageCode}`
+          });
+          return {
+            ok: true,
+            translated: wantsTranslation,
+            track: { languageCode },
+            mode: "fallback",
+            needsPlayback: false
+          };
+        }
+        const appliedModule = applyTranslatedSelection(embed, modules, selection);
+        if (!appliedModule && attempt < maxAttempts - 1) {
+          await new Promise((r) => window.setTimeout(r, delayMs));
+          continue;
+        }
+        const translated = wantsTranslation && (selection.mode === "translated" || selection.mode === "youtube-translate") && selection.mode !== "source-same-language";
+        return {
+          ok: Boolean(appliedModule),
+          translated,
+          track: selection.track,
+          mode: selection.mode,
+          sameLanguageOnly: selection.mode === "source-same-language",
+          needsPlayback: false
+        };
+      } catch (e) {
+      }
+      await new Promise((r) => window.setTimeout(r, delayMs));
+    }
+    return { ok: false, translated: false, track: null, mode: "failed", needsPlayback: false };
   }
   async function prefetchCaptionLanguages(player, languages, onProgress) {
     const embed = getEmbed(player);
     if (!(embed == null ? void 0 : embed.setOption)) return { ok: false, imported: [] };
     if (!hasYouTubePlaybackStarted(embed)) return { ok: false, imported: [] };
     onProgress == null ? void 0 : onProgress("\u05E7\u05D8\u05DC\u05D5\u05D2 YouTube", 0, languages.length);
-    const { tracks, translations } = await waitForCaptionsCatalog(embed, 6e3);
+    await waitForCaptionsCatalog(embed, 6e3);
     const imported = [];
     for (let i = 0; i < languages.length; i += 1) {
       const lang = languages[i];
+      if (lang.value === "none") continue;
       onProgress == null ? void 0 : onProgress(lang.label, i + 1, languages.length);
-      const selection = buildTrack(lang.value, tracks, translations);
-      const applied = applyTrack(embed, selection.track);
-      if (applied) imported.push(lang.value);
-      await new Promise((r) => window.setTimeout(r, 400));
+      const result = await enableNativeYouTubeCaptions(player, {
+        targetLang: lang.value,
+        sourceLang: "auto"
+      });
+      if (result.ok) imported.push(lang.value);
+      await new Promise((r) => window.setTimeout(r, 350));
     }
     return { ok: imported.length > 0, imported };
   }

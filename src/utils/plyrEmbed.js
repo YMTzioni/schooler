@@ -92,7 +92,7 @@ window.SchoolerPlayerConfig = Object.assign({
   if (window.__SchoolerPlayerLoader) return;
   window.__SchoolerPlayerLoader = true;
   var s = document.createElement('script');
-  s.src = ${JSON.stringify(`${appOrigin}/schooler-player-overlay.js`)} + '?v=4';
+  s.src = ${JSON.stringify(`${appOrigin}/schooler-player-overlay.js`)} + '?v=5';
   s.async = true;
   (document.head || document.documentElement).appendChild(s);
 })();
